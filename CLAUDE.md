@@ -11,7 +11,7 @@ Font: "Press Start 2P" (Google Fonts).
 - [x] Phase 1: Raycasting engine + player movement
 - [x] Phase 2: Maze generation + pellet placement
 - [x] Phase 3: Enemy AI + collision
-- [ ] Phase 4: Power-ups + combat
+- [x] Phase 4: Power-ups + combat
 - [ ] Phase 5: HUD + minimap
 - [ ] Phase 6: Screens + audio (combined to stay within token limits)
 
@@ -135,7 +135,21 @@ Font: "Press Start 2P" (Google Fonts).
 - Player invincibility: 2s after being hit, 2s on spawn
 - Death flash: red screen overlay fades over 0.4s
 - isGhostWalkable: ghosts cannot enter map value 2 (safe rooms)
-- BUG NOTED: respawnGhost uses g.isboss (wrong case) instead of g.isBoss — fix in Phase 4
+- BUG NOTED fixed: respawnGhost g.isboss → g.isBoss
+
+### Phase 4
+- 5 power-up types: FIRE_BREATH, TAIL_WHIP, FOSSIL_SHIELD, SPEED_BOOST, ANCIENT_RAGE
+- Power-ups distributed across maze (1 of each per level), staggered bob cycles
+- FIRE_BREATH: Space key kills any ghost within 5 units (5s, no frighten required)
+- TAIL_WHIP: instant AOE stun all ghosts within 2 units (2s stun, cell move halted)
+- FOSSIL_SHIELD: absorbs next hit (small blue flash confirms shield used), no damage taken
+- SPEED_BOOST: 1.5x moveSpeed for 8s (applied in updatePlayer as spdMult)
+- ANCIENT_RAGE: frightenTimer=10, same global mechanism as power pellet
+- ANCIENT_RAGE timer stays in sync with frightenTimer (updated each frame)
+- Power-up sprites: colored square billboard with border highlight, bob animation, 2D label when close
+- State tracking: STATE.activePowerUp, STATE.activePowerUpTimer, STATE.shieldActive
+- Ghost stun: stunTimer field on ghost, ghosts skip movement while stunTimer > 0
+- Respawn on ghost stun resets stunTimer to 0
 
 ---
 
