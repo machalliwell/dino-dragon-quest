@@ -9,7 +9,7 @@ Font: "Press Start 2P" (Google Fonts).
 
 ## Build Phases
 - [x] Phase 1: Raycasting engine + player movement
-- [ ] Phase 2: Maze generation + pellet placement
+- [x] Phase 2: Maze generation + pellet placement
 - [ ] Phase 3: Enemy AI + collision
 - [ ] Phase 4: Power-ups + combat
 - [ ] Phase 5: HUD + minimap
@@ -108,6 +108,19 @@ Font: "Press Start 2P" (Google Fonts).
 - Key events: only prevent default on game control keys (ArrowKeys, WASD, Space)
 - Map/MAP_W/MAP_H: use `let` so maze generator can reassign in Phase 2
 - KNOWN: No frame-rate cap — runs at monitor refresh rate. Acceptable for now.
+
+### Phase 2
+- Maze gen: recursive backtracker (DFS) + 12% extra wall removals for loop passages
+- Map values: 0=open, 1=wall, 2=safe room (walkable but ghosts excluded in Phase 3)
+- Pellet grid: separate array (pelletGrid[y][x]) — keeps collision map clean
+- Power pellets: max 6 per level, placed >3 cells from spawn
+- Small pellets: all open cells except 3×3 spawn area (~80% of corridors)
+- Safe rooms: 2 per level, random interior logical cells, not at spawn
+- ZBuffer (Float32Array[800]): filled during wall pass, used for sprite depth test
+- Sprite projection: Lode's raycasting camera transform (invDet method)
+- Distance fog: walls darken by distance for depth cues (max 75% darkening)
+- Delta time: capped at 50ms/frame to prevent physics tunnelling on tab-out
+- Pellet collection: checked per-frame at player's current map cell
 
 ---
 

@@ -14,11 +14,7 @@
       height: 100vh;
       overflow: hidden;
     }
-    canvas {
-      display: block;
-      /* Crisp pixel scaling if browser scales the canvas */
-      image-rendering: pixelated;
-    }
+    canvas { display: block; image-rendering: pixelated; }
   </style>
 </head>
 <body>
@@ -31,16 +27,16 @@
 // ================================================================
 const W = 800, H = 600;
 const HALF_H = H / 2;
-
-const FOV      = Math.PI / 3;   // 60° field of view
+const FOV      = Math.PI / 3;  // 60°
 const HALF_FOV = FOV / 2;
-const MAX_DEPTH = 24;            // max ray travel distance in map units
+const TAN_HALF = Math.tan(HALF_FOV); // precomputed for sprite projection
+const MAX_DEPTH = 24;
 
 // ================================================================
-// GAME STATE  (will grow each phase)
+// GAME STATE
 // ================================================================
 const STATE = {
-  phase: 'PLAYING',   // TITLE | PLAYING | LEVEL_COMPLETE | GAME_OVER
+  phase: 'PLAYING', // TITLE | PLAYING | LEVEL_COMPLETE | GAME_OVER
   level: 1,
   score: 0,
   lives: 3,
@@ -48,81 +44,203 @@ const STATE = {
 
 // ================================================================
 // CHARACTER DEFINITIONS
-// Simple multipliers — no complex stat systems
 // ================================================================
 const CHARACTERS = {
   DINO_WARRIOR: {
-    name: 'DINO WARRIOR',
-    color: '#44ff44',
-    moveSpeed:  0.060,   // fastest
-    rotSpeed:   0.038,
-    attackPower: 1,      // needs 2 hits to kill a ghost (weak)
-    hitsToKill:  2,
+    name: 'DINO WARRIOR', color: '#44ff44',
+    moveSpeed: 0.060, rotSpeed: 0.038,
+    attackPower: 1, hitsToKill: 2,
   },
   DRAGON_KNIGHT: {
-    name: 'DRAGON KNIGHT',
-    color: '#ff4444',
-    moveSpeed:  0.040,   // slowest
-    rotSpeed:   0.030,
-    attackPower: 2,      // 1 hit kills any normal ghost
-    hitsToKill:  1,
+    name: 'DRAGON KNIGHT', color: '#ff4444',
+    moveSpeed: 0.040, rotSpeed: 0.030,
+    attackPower: 2, hitsToKill: 1,
   },
   PALEO_PACMAN: {
-    name: 'PALEO PACMAN',
-    color: '#ffff44',
-    moveSpeed:  0.050,   // balanced
-    rotSpeed:   0.034,
-    attackPower: 1,
-    hitsToKill:  1,
+    name: 'PALEO PACMAN', color: '#ffff44',
+    moveSpeed: 0.050, rotSpeed: 0.034,
+    attackPower: 1, hitsToKill: 1,
   },
 };
-
-// Active character — will be set on title screen (Phase 6)
-// Default to balanced for Phase 1 playtesting
 let char = CHARACTERS.PALEO_PACMAN;
 
 // ================================================================
-// MAP  (placeholder — replaced by recursive backtracker in Phase 2)
-// 1 = wall, 0 = open corridor
+// LEVEL CONFIGS
+// Logical room grid: (cols × rows).  Physical map: (2*cols+1) × (2*rows+1)
 // ================================================================
-const TEST_MAP = [
-  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-  [1,0,1,1,0,0,1,1,1,0,0,1,1,0,0,1],
-  [1,0,1,0,0,0,0,0,1,0,0,1,0,0,0,1],
-  [1,0,0,0,1,1,0,0,0,0,1,0,0,0,0,1],
-  [1,0,0,1,1,0,0,1,0,0,1,0,0,1,0,1],
-  [1,0,0,0,0,0,1,1,1,0,0,0,0,1,0,1],
-  [1,0,1,0,0,1,0,0,0,0,1,0,0,0,0,1],
-  [1,0,1,1,0,1,0,1,0,0,1,0,1,1,0,1],
-  [1,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
-  [1,0,0,1,0,0,1,1,1,0,0,1,0,0,0,1],
-  [1,0,0,1,0,0,0,0,0,0,0,1,0,1,0,1],
-  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-];
+const LEVEL_CONFIGS = {
+  1: { cols: 8,  rows: 8,  name: 'CRETACEOUS CAVERNS', ghostCount: 3 },
+  2: { cols: 11, rows: 11, name: 'MESOZOIC MINES',      ghostCount: 5 },
+  3: { cols: 14, rows: 14, name: "DRAGON'S LAIR",       ghostCount: 7 },
+};
 
-// These will be reassigned each time a level's maze is generated
-let map    = TEST_MAP;
-let MAP_W  = map[0].length;
-let MAP_H  = map.length;
+// ================================================================
+// MAP DATA  (reassigned by initLevel)
+// map[y][x]: 0=open  1=wall  2=safe room
+// pelletGrid[y][x]: 0=none  1=small pellet  2=power pellet
+// ================================================================
+let map         = [];
+let MAP_W       = 0;
+let MAP_H       = 0;
+let pelletGrid  = [];
+let pelletsLeft = 0;
+let safeRoomSet = new Set(); // "x,y" keys of safe-room cells (map value 2)
+
+// ================================================================
+// MAZE GENERATOR — recursive backtracker (DFS)
+//
+// Creates a "perfect" maze (all cells reachable, no loops) then
+// adds ~12% extra passages to create the loops needed for good gameplay.
+//
+// Physical grid coords:
+//   Logical cell (c, r)  →  physical (2c+1, 2r+1)
+//   Wall between (c,r) and (c+1,r)  →  physical (2c+2, 2r+1)
+// ================================================================
+function generateMaze(cols, rows) {
+  const mw = cols * 2 + 1;
+  const mh = rows * 2 + 1;
+
+  // Start all as walls
+  const grid = Array.from({ length: mh }, () => new Array(mw).fill(1));
+
+  const visited = Array.from({ length: rows }, () => new Array(cols).fill(false));
+  const stack   = [[0, 0]];
+  visited[0][0] = true;
+  grid[1][1]    = 0; // open start cell
+
+  const dirs = [[0,-1],[1,0],[0,1],[-1,0]]; // up right down left
+
+  while (stack.length > 0) {
+    const [cx, cy] = stack[stack.length - 1];
+
+    // Shuffle directions for organic-looking mazes
+    const shuffled = dirs.slice().sort(() => Math.random() - 0.5);
+    let moved = false;
+
+    for (const [dx, dy] of shuffled) {
+      const nx = cx + dx, ny = cy + dy;
+      if (nx >= 0 && nx < cols && ny >= 0 && ny < rows && !visited[ny][nx]) {
+        // Carve passage: open the wall between current and neighbor
+        grid[cy * 2 + 1 + dy][cx * 2 + 1 + dx] = 0;
+        // Open the neighbor cell itself
+        grid[ny * 2 + 1][nx * 2 + 1] = 0;
+        visited[ny][nx] = true;
+        stack.push([nx, ny]);
+        moved = true;
+        break;
+      }
+    }
+
+    if (!moved) stack.pop(); // dead end — backtrack
+  }
+
+  // Add extra passages to create loops (improves Pacman-style gameplay)
+  // Only removes wall cells that separate two open cells (prevents dead pockets)
+  for (let y = 2; y < mh - 2; y++) {
+    for (let x = 2; x < mw - 2; x++) {
+      if (grid[y][x] !== 1) continue;
+      if (Math.random() > 0.12) continue;
+
+      const hLoop = grid[y][x-1] === 0 && grid[y][x+1] === 0;
+      const vLoop = grid[y-1][x] === 0 && grid[y+1][x] === 0;
+      if (hLoop || vLoop) grid[y][x] = 0;
+    }
+  }
+
+  return grid;
+}
+
+// ================================================================
+// LEVEL INITIALISER
+// Generates maze, places safe rooms, fills pellet grid,
+// sets player start position.
+// ================================================================
+function initLevel(levelNum) {
+  const cfg = LEVEL_CONFIGS[levelNum];
+
+  // Generate the physical maze grid
+  const grid = generateMaze(cfg.cols, cfg.rows);
+
+  map   = grid;
+  MAP_W = grid[0].length;
+  MAP_H = grid.length;
+
+  safeRoomSet = new Set();
+
+  // --- Place 2 safe rooms at random interior logical cells ---
+  // Avoid cell (0,0) which is the player start
+  const roomCandidates = [];
+  for (let r = 0; r < cfg.rows; r++) {
+    for (let c = 0; c < cfg.cols; c++) {
+      if (r === 0 && c === 0) continue; // skip spawn
+      const px = c * 2 + 1, py = r * 2 + 1;
+      if (map[py][px] === 0) roomCandidates.push([px, py]);
+    }
+  }
+  // Fisher-Yates shuffle, take first 2
+  for (let i = roomCandidates.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [roomCandidates[i], roomCandidates[j]] = [roomCandidates[j], roomCandidates[i]];
+  }
+  for (let i = 0; i < 2 && i < roomCandidates.length; i++) {
+    const [sx, sy] = roomCandidates[i];
+    map[sy][sx] = 2; // mark as safe room
+    safeRoomSet.add(`${sx},${sy}`);
+  }
+
+  // --- Build pellet grid ---
+  pelletGrid = Array.from({ length: MAP_H }, () => new Array(MAP_W).fill(0));
+  pelletsLeft = 0;
+
+  // Power pellets: place up to 6, spaced away from spawn
+  const powerPelletCells = [];
+  for (let y = 1; y < MAP_H - 1; y++) {
+    for (let x = 1; x < MAP_W - 1; x++) {
+      if (map[y][x] === 0 && (x > 3 || y > 3)) {
+        powerPelletCells.push([x, y]);
+      }
+    }
+  }
+  for (let i = powerPelletCells.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [powerPelletCells[i], powerPelletCells[j]] = [powerPelletCells[j], powerPelletCells[i]];
+  }
+  const maxPower = Math.min(6, Math.floor(powerPelletCells.length * 0.04));
+  for (let i = 0; i < maxPower; i++) {
+    const [x, y] = powerPelletCells[i];
+    pelletGrid[y][x] = 2;
+  }
+
+  // Small pellets: all remaining open cells (value 0) except player spawn area
+  for (let y = 1; y < MAP_H - 1; y++) {
+    for (let x = 1; x < MAP_W - 1; x++) {
+      if (map[y][x] === 0 && pelletGrid[y][x] === 0) {
+        // Skip the 3x3 area around spawn so player isn't immediately collecting
+        if (x <= 2 && y <= 2) continue;
+        pelletGrid[y][x] = 1;
+        pelletsLeft++;
+      }
+      if (pelletGrid[y][x] === 2) pelletsLeft++; // count power pellets too
+    }
+  }
+
+  // --- Reset player to spawn ---
+  player.x     = 1.5;
+  player.y     = 1.5;
+  player.angle = 0;
+}
 
 // ================================================================
 // PLAYER STATE
 // ================================================================
-const player = {
-  x: 1.5,
-  y: 1.5,
-  angle: 0,    // radians; 0 = facing right (+x), π/2 = facing down (+y)
-};
+const player = { x: 1.5, y: 1.5, angle: 0 };
 
 // ================================================================
 // INPUT
-// Storing key state in a plain object for easy polling each frame
 // ================================================================
 const keys = {};
 window.addEventListener('keydown', e => {
   keys[e.code] = true;
-  // Only preventDefault for game control keys to avoid eating browser shortcuts
   const gameKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',
                     'KeyW','KeyA','KeyS','KeyD','Space'];
   if (gameKeys.includes(e.code)) e.preventDefault();
@@ -130,155 +248,235 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 
 // ================================================================
-// RAYCASTING ENGINE — DDA (Digital Differential Analysis)
-//
-// We cast one ray per screen column.  For each ray we march along
-// the grid using DDA until we hit a wall cell, then compute the
-// perpendicular (not Euclidean) distance to eliminate fish-eye.
-//
-// Coordinate system:
-//   +x = right,  +y = down  (standard canvas orientation)
-//   angle 0   → cos=1, sin=0  → moving right
-//   angle π/2 → cos=0, sin=1  → moving down
+// RAYCASTING ENGINE — DDA
 // ================================================================
+const canvas = document.getElementById('game');
+const ctx    = canvas.getContext('2d');
+
+// Z-buffer: stores perpendicular wall distance for each screen column.
+// Sprite columns are only drawn where they are closer than the wall.
+const zBuffer = new Float32Array(W);
 
 /**
- * Cast a single ray from the player at the given world-space angle.
- * @param {number} angle  Ray angle in radians
- * @returns {{ dist: number, side: number }}
- *   dist — perpendicular wall distance (fish-eye corrected)
- *   side — 0 = hit a vertical wall face (X-axis crossing),
- *           1 = hit a horizontal wall face (Y-axis crossing)
+ * Cast a ray and return perpendicular wall distance + side hit.
+ * Also handles safe-room walls (value 2) as solid walls.
  */
 function castRay(angle) {
-  // Normalise to [0, 2π)
   angle = ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
 
   const cosA = Math.cos(angle);
   const sinA = Math.sin(angle);
 
-  // Current map cell
   let mapX = Math.floor(player.x);
   let mapY = Math.floor(player.y);
 
-  // How far the ray travels in world-space to cross one full grid unit
-  // along each axis.  Guard against division by zero with 1e30 (≈ infinity).
   const deltaDistX = cosA === 0 ? 1e30 : Math.abs(1 / cosA);
   const deltaDistY = sinA === 0 ? 1e30 : Math.abs(1 / sinA);
 
-  // Step direction (+1 or -1) and initial fractional distance
-  // to the first grid line crossing along each axis
   let stepX, stepY, sideDistX, sideDistY;
 
-  if (cosA < 0) {
-    stepX     = -1;
-    sideDistX = (player.x - mapX) * deltaDistX;
-  } else {
-    stepX     = 1;
-    sideDistX = (mapX + 1.0 - player.x) * deltaDistX;
-  }
+  if (cosA < 0) { stepX = -1; sideDistX = (player.x - mapX) * deltaDistX; }
+  else          { stepX =  1; sideDistX = (mapX + 1.0 - player.x) * deltaDistX; }
 
-  if (sinA < 0) {
-    stepY     = -1;
-    sideDistY = (player.y - mapY) * deltaDistY;
-  } else {
-    stepY     = 1;
-    sideDistY = (mapY + 1.0 - player.y) * deltaDistY;
-  }
+  if (sinA < 0) { stepY = -1; sideDistY = (player.y - mapY) * deltaDistY; }
+  else          { stepY =  1; sideDistY = (mapY + 1.0 - player.y) * deltaDistY; }
 
-  // March — advance to whichever axis crossing is closer each step
-  let side = 0;
-  let hit  = false;
+  let side = 0, hit = false;
 
   for (let i = 0; i < MAX_DEPTH * 12 && !hit; i++) {
-    if (sideDistX < sideDistY) {
-      sideDistX += deltaDistX;
-      mapX += stepX;
-      side = 0;
-    } else {
-      sideDistY += deltaDistY;
-      mapY += stepY;
-      side = 1;
-    }
+    if (sideDistX < sideDistY) { sideDistX += deltaDistX; mapX += stepX; side = 0; }
+    else                       { sideDistY += deltaDistY; mapY += stepY; side = 1; }
 
-    // Out-of-bounds guard
     if (mapX < 0 || mapX >= MAP_W || mapY < 0 || mapY >= MAP_H) break;
-
     if (map[mapY][mapX] === 1) hit = true;
   }
 
   if (!hit) return { dist: MAX_DEPTH, side: 0 };
 
-  // Perpendicular distance eliminates fish-eye distortion.
-  // We back-calculate from how many deltaDistX/Y steps were taken.
   let perpDist;
-  if (side === 0) {
-    perpDist = (mapX - player.x + (1 - stepX) / 2) / cosA;
-  } else {
-    perpDist = (mapY - player.y + (1 - stepY) / 2) / sinA;
-  }
+  if (side === 0) perpDist = (mapX - player.x + (1 - stepX) / 2) / cosA;
+  else            perpDist = (mapY - player.y + (1 - stepY) / 2) / sinA;
 
   return { dist: Math.abs(perpDist), side };
 }
 
 // ================================================================
-// LEVEL WALL PALETTES
-// Colored rectangles only — no bitmap textures
+// WALL PALETTES  (colored rectangles — no bitmaps)
 // ================================================================
 const WALL_PALETTES = {
-  1: { bright: [160,  90,  40], dark: [88,  50, 22] },  // CRETACEOUS: warm brown
-  2: { bright: [ 80,  90, 110], dark: [44,  50, 60] },  // MESOZOIC:   slate blue-grey
-  3: { bright: [160,  30,  30], dark: [88,  16, 16] },  // DRAGON'S:   deep red
+  1: { bright: [160,  90,  40], dark: [ 88,  50, 22] }, // CRETACEOUS: warm brown
+  2: { bright: [ 80,  90, 110], dark: [ 44,  50, 60] }, // MESOZOIC:   slate blue-grey
+  3: { bright: [160,  30,  30], dark: [ 88,  16, 16] }, // DRAGON'S:   deep red
 };
 
 // ================================================================
-// RENDER 3D SCENE
+// SPRITE PROJECTION UTIL
+// Projects a world-space (wx, wy) point into camera space.
+// Returns { transformX, transformZ } where transformZ is depth.
+//
+// Uses Lode's raycasting tutorial camera transform.
+// Camera plane half-width = TAN_HALF (tan of half FOV).
 // ================================================================
-const canvas = document.getElementById('game');
-const ctx    = canvas.getContext('2d');
+function projectPoint(wx, wy) {
+  const dx   = wx - player.x;
+  const dy   = wy - player.y;
+  const dirX = Math.cos(player.angle);
+  const dirY = Math.sin(player.angle);
 
-function renderScene() {
-  const palette = WALL_PALETTES[STATE.level] || WALL_PALETTES[1];
+  // Camera plane vectors (perpendicular to view direction)
+  const planeX = -dirY * TAN_HALF;
+  const planeY =  dirX * TAN_HALF;
 
-  // --- Ceiling (upper half) ---
-  ctx.fillStyle = '#0d0d1a';
-  ctx.fillRect(0, 0, W, HALF_H);
+  // Determinant of camera matrix (should never be 0 for valid angles)
+  const invDet = 1.0 / (planeX * dirY - dirX * planeY);
 
-  // --- Floor (lower half) ---
-  ctx.fillStyle = '#1a0e06';
-  ctx.fillRect(0, HALF_H, W, HALF_H);
+  const transformX = invDet * ( dirY * dx - dirX * dy);
+  const transformZ = invDet * (-planeY * dx + planeX * dy);
 
-  // --- Walls: cast one ray per screen column ---
-  for (let x = 0; x < W; x++) {
-    // Map column index to a ray angle within the player's FOV
-    const rayAngle = player.angle - HALF_FOV + (x / W) * FOV;
-    const { dist, side } = castRay(rayAngle);
+  return { transformX, transformZ };
+}
 
-    // Wall slice height is inversely proportional to distance
-    const wallH   = Math.min(H, Math.floor(H / dist));
-    const wallTop = HALF_H - wallH / 2;
+// ================================================================
+// SPRITE RENDERER
+// Draws billboard sprites (pellets, later: enemies) depth-tested
+// against the zBuffer filled by the wall pass.
+// ================================================================
 
-    // Y-side hits (horizontal wall faces) are drawn darker —
-    // this gives the illusion of directional lighting with zero overhead.
-    const [br, bg, bb] = side === 1 ? palette.dark : palette.bright;
+// Pulsing animation time (seconds)
+let pulse = 0;
 
-    ctx.fillStyle = `rgb(${br},${bg},${bb})`;
-    ctx.fillRect(x, wallTop, 1, wallH);
+function renderSprites(dt) {
+  pulse += dt;
+
+  // Collect visible sprite positions from pelletGrid
+  const sprites = [];
+
+  for (let y = 0; y < MAP_H; y++) {
+    for (let x = 0; x < MAP_W; x++) {
+      const p = pelletGrid[y][x];
+      if (!p) continue;
+
+      const wx = x + 0.5, wy = y + 0.5;
+      const { transformX, transformZ } = projectPoint(wx, wy);
+
+      // Cull sprites behind the camera or too far
+      if (transformZ < 0.1 || transformZ > MAX_DEPTH) continue;
+
+      sprites.push({ wx, wy, type: p, transformX, transformZ });
+    }
+  }
+
+  // Sort far-to-near so overlapping sprites paint correctly
+  sprites.sort((a, b) => b.transformZ - a.transformZ);
+
+  for (const s of sprites) {
+    const { transformX, transformZ, type } = s;
+
+    // Sprite screen-space size (same projection formula as wall strips)
+    const spriteH = Math.abs(Math.floor(H / transformZ));
+    const spriteW = spriteH;
+
+    // Horizontal center on screen
+    const screenX = Math.floor((W / 2) * (1 + transformX / transformZ));
+
+    const left   = screenX - (spriteW >> 1);
+    const right  = left + spriteW;
+    const top    = HALF_H - (spriteH >> 1);
+
+    if (right < 0 || left >= W) continue; // fully off screen
+
+    if (type === 1) {
+      // Small pellet — tiny yellow dot in the sprite center
+      const dotH = Math.max(2, Math.floor(spriteH * 0.18));
+      const dotW = Math.max(1, Math.floor(spriteW * 0.18));
+      const dotY = HALF_H - (dotH >> 1);
+
+      ctx.fillStyle = '#ffe632';
+
+      for (let sx = Math.max(0, left); sx < Math.min(W, right); sx++) {
+        if (transformZ >= zBuffer[sx]) continue; // wall is closer
+        const relX = (sx - left) / spriteW;
+        if (relX < 0.41 || relX > 0.59) continue; // only center columns
+        ctx.fillRect(sx, dotY, 1, dotH);
+      }
+
+    } else if (type === 2) {
+      // Power pellet — larger cyan orb with pulsing size
+      const scale  = 0.22 + Math.sin(pulse * 4) * 0.06;
+      const dotH   = Math.max(4, Math.floor(spriteH * scale));
+      const dotY   = HALF_H - (dotH >> 1);
+      const alpha  = 0.75 + Math.sin(pulse * 4) * 0.25;
+
+      ctx.fillStyle = `rgba(0, 255, 200, ${alpha.toFixed(2)})`;
+
+      for (let sx = Math.max(0, left); sx < Math.min(W, right); sx++) {
+        if (transformZ >= zBuffer[sx]) continue;
+        const relX = (sx - left) / spriteW;
+        if (relX < 0.3 || relX > 0.7) continue; // center 40% of sprite width
+        ctx.fillRect(sx, dotY, 1, dotH);
+      }
+    }
   }
 }
 
 // ================================================================
-// PLAYER MOVEMENT + COLLISION
-// Axes are checked independently so the player can slide along walls
+// RENDER 3D SCENE
+// Fills zBuffer during wall pass, then renders sprites on top.
 // ================================================================
+function renderScene(dt) {
+  const palette = WALL_PALETTES[STATE.level] || WALL_PALETTES[1];
+
+  // Ceiling
+  ctx.fillStyle = '#0d0d1a';
+  ctx.fillRect(0, 0, W, HALF_H);
+
+  // Floor
+  ctx.fillStyle = '#1a0e06';
+  ctx.fillRect(0, HALF_H, W, HALF_H);
+
+  // Wall strips — one per screen column
+  for (let x = 0; x < W; x++) {
+    const rayAngle = player.angle - HALF_FOV + (x / W) * FOV;
+    const { dist, side } = castRay(rayAngle);
+
+    zBuffer[x] = dist; // store for sprite depth test
+
+    const wallH   = Math.min(H, Math.floor(H / dist));
+    const wallTop = HALF_H - (wallH >> 1);
+
+    // Distance fog: walls darken with depth for better spatial reading
+    const fog   = Math.min(1, dist / MAX_DEPTH);
+    const shade = (side === 1 ? 0.55 : 1.0) * (1 - fog * 0.75);
+
+    const [pr, pg, pb] = palette.bright;
+    const r = Math.floor(pr * shade);
+    const g = Math.floor(pg * shade);
+    const b = Math.floor(pb * shade);
+
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fillRect(x, wallTop, 1, wallH);
+  }
+
+  // Sprites on top of walls (depth-tested via zBuffer)
+  renderSprites(dt);
+}
+
+// ================================================================
+// PLAYER MOVEMENT + COLLISION + PELLET COLLECTION
+// ================================================================
+
+// Check if map cell (mx, my) is walkable (not a wall)
+function isWalkable(mx, my) {
+  if (mx < 0 || mx >= MAP_W || my < 0 || my >= MAP_H) return false;
+  return map[my][mx] !== 1; // 0 = open, 2 = safe room — both walkable
+}
+
 function updatePlayer() {
   const { moveSpeed, rotSpeed } = char;
 
-  // Rotation
   if (keys['ArrowLeft']  || keys['KeyA']) player.angle -= rotSpeed;
   if (keys['ArrowRight'] || keys['KeyD']) player.angle += rotSpeed;
 
-  // Forward / backward
   let dx = 0, dy = 0;
   if (keys['ArrowUp']   || keys['KeyW']) {
     dx =  Math.cos(player.angle) * moveSpeed;
@@ -289,23 +487,33 @@ function updatePlayer() {
     dy = -Math.sin(player.angle) * moveSpeed;
   }
 
-  // Separate X/Y collision so the player can slide along walls.
-  // The 0.25 buffer keeps the player visually clear of wall faces.
   const MARGIN = 0.25;
 
   if (dx !== 0) {
     const nx = player.x + dx;
-    const cx = Math.floor(nx + Math.sign(dx) * MARGIN);
-    if (cx >= 0 && cx < MAP_W && map[Math.floor(player.y)][cx] === 0) {
+    if (isWalkable(Math.floor(nx + Math.sign(dx) * MARGIN), Math.floor(player.y)))
       player.x = nx;
-    }
   }
-
   if (dy !== 0) {
     const ny = player.y + dy;
-    const cy = Math.floor(ny + Math.sign(dy) * MARGIN);
-    if (cy >= 0 && cy < MAP_H && map[cy][Math.floor(player.x)] === 0) {
+    if (isWalkable(Math.floor(player.x), Math.floor(ny + Math.sign(dy) * MARGIN)))
       player.y = ny;
+  }
+
+  // Pellet collection — check the cell the player is currently standing in
+  const cx = Math.floor(player.x);
+  const cy = Math.floor(player.y);
+
+  if (pelletGrid[cy] && pelletGrid[cy][cx] > 0) {
+    const ptype = pelletGrid[cy][cx];
+    pelletGrid[cy][cx] = 0;
+    pelletsLeft--;
+
+    if (ptype === 1) {
+      STATE.score += 10;
+    } else if (ptype === 2) {
+      STATE.score += 50;
+      // Ghost frighten mode will be triggered in Phase 3
     }
   }
 }
@@ -313,12 +521,24 @@ function updatePlayer() {
 // ================================================================
 // GAME LOOP
 // ================================================================
-function loop() {
-  updatePlayer();
-  renderScene();
+let lastTime = 0;
+
+function loop(timestamp) {
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.05); // cap at 50ms
+  lastTime = timestamp;
+
+  if (STATE.phase === 'PLAYING') {
+    updatePlayer();
+    renderScene(dt);
+  }
+
   requestAnimationFrame(loop);
 }
 
+// ================================================================
+// BOOT
+// ================================================================
+initLevel(STATE.level);
 requestAnimationFrame(loop);
 </script>
 </body>
