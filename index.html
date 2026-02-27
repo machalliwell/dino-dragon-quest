@@ -117,7 +117,7 @@ const PU_TYPES = ['FIRE_BREATH','TAIL_WHIP','FOSSIL_SHIELD','SPEED_BOOST','ANCIE
 // MAP DATA
 // ================================================================
 let map = [], MAP_W = 0, MAP_H = 0;
-let pelletGrid = [], pelletsLeft = 0;
+let pelletGrid = [], pelletsLeft = 0, totalPellets = 0;
 let safeRoomSet = new Set();
 let ghosts = [], powerUps = [];
 
@@ -245,6 +245,7 @@ function initLevel(levelNum) {
   for(let y=1;y<MAP_H-1;y++) for(let x=1;x<MAP_W-1;x++){
     if(map[y][x]===0&&pelletGrid[y][x]===0){if(x<=2&&y<=2)continue;pelletGrid[y][x]=1;pelletsLeft++;}
   }
+  totalPellets=pelletsLeft; // snapshot for progress bar
 
   spawnGhosts(levelNum,diff);
   spawnPowerUps();
@@ -572,6 +573,17 @@ function renderHUD(){
     const pct=STATE.frightenTimer/10;
     ctx.fillStyle=STATE.frightenTimer<3&&Math.floor(pulse*4)%2===0?'#fff':'#0055ff';
     ctx.fillRect(0,26,Math.floor(W*pct),4);
+  }
+
+  // Pellet progress bar — drains as pellets are collected, color shifts green→yellow→red
+  if(totalPellets>0){
+    const pct=pelletsLeft/totalPellets;
+    const barX=8,barY=32,barW=W-16,barH=14;
+    ctx.fillStyle='rgba(0,0,0,0.70)'; ctx.fillRect(barX,barY,barW,barH);
+    ctx.fillStyle=pct>0.5?'#22cc55':pct>0.25?'#ccaa00':'#cc2222';
+    ctx.fillRect(barX,barY,Math.round(barW*pct),barH);
+    ctx.font='6px "Press Start 2P",monospace'; ctx.textAlign='center'; ctx.fillStyle='#fff';
+    ctx.fillText(`PELLETS: ${pelletsLeft}/${totalPellets}`,W/2,barY+barH/2+2);
   }
 
   // Bottom-left panel
