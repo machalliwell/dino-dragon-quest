@@ -12,7 +12,7 @@ Font: "Press Start 2P" (Google Fonts).
 - [x] Phase 2: Maze generation + pellet placement
 - [x] Phase 3: Enemy AI + collision
 - [x] Phase 4: Power-ups + combat
-- [ ] Phase 5: HUD + minimap
+- [x] Phase 5: HUD + minimap
 - [ ] Phase 6: Screens + audio (combined to stay within token limits)
 
 ---
@@ -150,6 +150,19 @@ Font: "Press Start 2P" (Google Fonts).
 - State tracking: STATE.activePowerUp, STATE.activePowerUpTimer, STATE.shieldActive
 - Ghost stun: stunTimer field on ghost, ghosts skip movement while stunTimer > 0
 - Respawn on ghost stun resets stunTimer to 0
+
+### Phase 5
+- Top bar (26px): score (7-digit zero-padded), level name, colored life squares, pellet count
+- Bottom-left (206×78): avatar + HP squares + invincibility bar + power-up name + timer bar
+- Avatar: 32×32 canvas-drawn icon per character (rects only, no images)
+- FOSSIL_SHIELD timer bar: pulsing solid bar (no countdown, lasts until hit)
+- Frighten timer bar: blue sub-bar under top bar, blinks in last 3s (matches ghost blink)
+- Minimap (120×120): variable cell size (max(3, floor(120/MAP_W))), whole map visible
+- Minimap: walls=dark gray, safe rooms=animated green, open=transparent, power-ups=colored dots
+- Minimap: ghosts=red(normal)/blue(frightened) 3px dots, player=white triangle arrow
+- SANCTUARY overlay: pulsing green text at H/2+28 when player cell is in safeRoomSet
+- ctx.save/restore around renderHUD to prevent textAlign/textBaseline leakage
+- Lives displayed as 10×12 colored rectangles (avoids font glyph issues with ♥)
 
 ---
 

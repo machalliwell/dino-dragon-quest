@@ -446,6 +446,202 @@ function renderSprites(dt) {
 }
 
 // ================================================================
+// CHARACTER AVATAR DRAWING  (32×32 canvas icon, no images)
+// ================================================================
+function drawAvatar(x, y) {
+  ctx.fillStyle = '#111'; ctx.fillRect(x, y, 32, 32);
+  if (char === CHARACTERS.DINO_WARRIOR) {
+    ctx.fillStyle='#22aa33'; ctx.fillRect(x+8,y+12,16,16);  // body
+    ctx.fillStyle='#55ee55';                                   // spines
+    [[x+9,y+5,4,9],[x+14,y+3,4,11],[x+19,y+5,4,9]].forEach(r=>ctx.fillRect(...r));
+    ctx.fillStyle='#fff'; ctx.fillRect(x+10,y+14,4,4);        // eye white
+    ctx.fillStyle='#000'; ctx.fillRect(x+11,y+15,2,2);        // pupil
+  } else if (char === CHARACTERS.DRAGON_KNIGHT) {
+    ctx.fillStyle='#bb1111'; ctx.fillRect(x+9,y+10,14,18);    // body
+    ctx.fillStyle='#882222';                                    // wings
+    ctx.fillRect(x+1,y+13,9,9); ctx.fillRect(x+22,y+13,9,9);
+    ctx.fillStyle='#ffdd00';                                    // crown
+    [[x+9,y+4,3,8],[x+14,y+2,4,10],[x+20,y+4,3,8]].forEach(r=>ctx.fillRect(...r));
+    ctx.fillStyle='#ff8800'; ctx.fillRect(x+11,y+14,4,3);     // eye
+  } else {
+    ctx.fillStyle='#ddcc00'; ctx.fillRect(x+5,y+5,22,22);     // body
+    ctx.fillStyle='#111'; ctx.fillRect(x+16,y+14,13,8);       // mouth
+    ctx.fillStyle='#000'; ctx.fillRect(x+9,y+9,5,5);          // eye
+  }
+}
+
+// ================================================================
+// MINIMAP  (2D overhead view, bottom-right corner)
+// Walls: dark gray  |  Safe rooms: pulsing green  |
+// Player: white arrow  |  Ghosts: red/blue dots  |  Power-ups: colored dots
+// ================================================================
+function drawMinimap() {
+  const mmW=120, mmH=120;
+  const mmX=W-mmW-8, mmY=H-mmH-8;
+
+  // Compute cell size so the whole map fits (minimum 3px per cell)
+  const cellW=Math.max(3,Math.floor(mmW/MAP_W));
+  const cellH=Math.max(3,Math.floor(mmH/MAP_H));
+  const actualW=cellW*MAP_W, actualH=cellH*MAP_H;
+  const offX=mmX+Math.floor((mmW-actualW)/2);
+  const offY=mmY+Math.floor((mmH-actualH)/2);
+
+  // Panel background + border
+  ctx.fillStyle='rgba(0,0,0,0.82)'; ctx.fillRect(mmX,mmY,mmW,mmH);
+  ctx.strokeStyle='#555'; ctx.lineWidth=1; ctx.strokeRect(mmX,mmY,mmW,mmH);
+
+  // Map cells
+  for(let y=0;y<MAP_H;y++) for(let x=0;x<MAP_W;x++){
+    const px=offX+x*cellW, py=offY+y*cellH, cell=map[y][x];
+    if(cell===1){
+      ctx.fillStyle='#2a2a2a'; ctx.fillRect(px,py,cellW,cellH);
+    } else if(cell===2){
+      // Safe room: animated green glow
+      const g=Math.floor(120+Math.sin(pulse*2)*40);
+      ctx.fillStyle=`rgb(0,${g},40)`; ctx.fillRect(px,py,cellW,cellH);
+    }
+    // Open corridors (0): dark background already covers it
+  }
+
+  // Power-ups: small colored squares
+  for(const pu of powerUps){
+    if(pu.collected) continue;
+    const def=POWER_UP_DEFS[pu.type];
+    ctx.fillStyle=def.hi;
+    ctx.fillRect(offX+Math.floor(pu.x)*cellW, offY+Math.floor(pu.y)*cellH, Math.max(2,cellW-1), Math.max(2,cellH-1));
+  }
+
+  // Ghosts: 3×3 dots (blue if frightened)
+  for(const g of ghosts){
+    if(g.dead) continue;
+    ctx.fillStyle=STATE.frightenTimer>0?'#4488ff':'#ff3333';
+    const gx=offX+Math.floor(g.x*cellW), gy=offY+Math.floor(g.y*cellH);
+    ctx.fillRect(gx-1,gy-1,3,3);
+  }
+
+  // Player: white arrow triangle pointing in view direction
+  const px=offX+player.x*cellW, py2=offY+player.y*cellH;
+  ctx.save();
+  ctx.translate(px,py2);
+  ctx.rotate(player.angle);
+  ctx.fillStyle='#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(5,0); ctx.lineTo(-3,-3); ctx.lineTo(-1,0); ctx.lineTo(-3,3);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+// ================================================================
+// HUD RENDERER
+// Top bar: score / level name / lives+pellets
+// Bottom-left: avatar + lives + active power-up + timer bar
+// Bottom-right: minimap
+// Center: SANCTUARY overlay when player is in a safe room
+// ================================================================
+function renderHUD() {
+  ctx.save();
+  ctx.textBaseline='middle';
+
+  // ---- TOP BAR ----
+  ctx.fillStyle='rgba(0,0,0,0.78)'; ctx.fillRect(0,0,W,26);
+
+  ctx.font='7px "Press Start 2P",monospace';
+  ctx.fillStyle='#ffee44';
+  ctx.textAlign='left';
+  ctx.fillText(`SCORE ${String(STATE.score).padStart(7,'0')}`, 8, 13);
+
+  ctx.fillStyle='#ffffff';
+  ctx.textAlign='center';
+  const lvName=LEVEL_CONFIGS[STATE.level]?.name||`LEVEL ${STATE.level}`;
+  ctx.fillText(`LV${STATE.level}: ${lvName}`, W/2, 13);
+
+  ctx.textAlign='right';
+  // Lives as colored squares (avoid potential missing Unicode glyphs)
+  for(let i=0;i<3;i++){
+    ctx.fillStyle=i<STATE.lives?'#ff4444':'#444';
+    ctx.fillRect(W-8-(2-i)*14, 7, 10, 12);
+  }
+  ctx.fillStyle='#aaffaa';
+  ctx.fillText(`○${pelletsLeft}`, W-52, 13);
+
+  // ---- BOTTOM-LEFT PANEL ----
+  const px=8, py=H-86, pw=206, ph=78;
+  ctx.fillStyle='rgba(0,0,0,0.78)'; ctx.fillRect(px,py,pw,ph);
+  ctx.strokeStyle='#444'; ctx.lineWidth=1; ctx.strokeRect(px,py,pw,ph);
+
+  drawAvatar(px+6, py+6);
+
+  ctx.textAlign='left';
+  ctx.font='6px "Press Start 2P",monospace';
+  ctx.fillStyle=char.color;
+  ctx.fillText(char.name, px+46, py+16);
+
+  // Lives bar (colored square per life)
+  ctx.fillStyle='#888'; ctx.fillText('HP', px+46, py+32);
+  for(let i=0;i<3;i++){
+    ctx.fillStyle=i<STATE.lives?'#ff4444':'#333';
+    ctx.fillRect(px+66+i*14, py+26, 10, 12);
+  }
+
+  // Invincibility indicator
+  if(STATE.playerInvincTimer>0){
+    ctx.fillStyle='rgba(255,255,0,0.6)';
+    ctx.fillRect(px+46, py+42, Math.floor(pw-52)*STATE.playerInvincTimer/2, 4);
+  }
+
+  // Active power-up section
+  if(STATE.activePowerUp){
+    const def=POWER_UP_DEFS[STATE.activePowerUp];
+    if(def){
+      // Colored icon square
+      ctx.fillStyle=def.color; ctx.fillRect(px+6,py+48,14,14);
+      ctx.fillStyle=def.hi;    ctx.fillRect(px+9,py+51,8,8);
+
+      ctx.fillStyle='#fff';
+      ctx.font='5px "Press Start 2P",monospace';
+      ctx.fillText(STATE.activePowerUp.replace(/_/g,' '), px+26, py+58);
+
+      // Timer bar (skip for FOSSIL_SHIELD — it lasts until hit)
+      if(STATE.activePowerUp!=='FOSSIL_SHIELD'){
+        const maxD=def.duration;
+        const pct=Math.min(1, STATE.activePowerUpTimer/maxD);
+        const bw=Math.floor((pw-32)*pct);
+        ctx.fillStyle='#333'; ctx.fillRect(px+6,py+68,pw-20,5);
+        ctx.fillStyle=def.hi; ctx.fillRect(px+6,py+68,bw,5);
+      } else {
+        // Shield: pulsing solid bar
+        const a=(0.6+Math.sin(pulse*4)*0.4).toFixed(2);
+        ctx.fillStyle=`rgba(68,136,255,${a})`;
+        ctx.fillRect(px+6,py+68,pw-20,5);
+      }
+    }
+  }
+
+  // Frighten timer bar (shown separately, full-width top sub-bar)
+  if(STATE.frightenTimer>0){
+    const pct=STATE.frightenTimer/10;
+    const bw=Math.floor(W*pct);
+    const blinkBar=STATE.frightenTimer<3&&Math.floor(pulse*4)%2===0;
+    ctx.fillStyle=blinkBar?'#ffffff':'#0055ff';
+    ctx.fillRect(0,26,bw,4);
+  }
+
+  drawMinimap();
+
+  // ---- SANCTUARY OVERLAY ----
+  const cx=Math.floor(player.x), cy2=Math.floor(player.y);
+  if(safeRoomSet.has(`${cx},${cy2}`)){
+    const alpha=(0.55+Math.sin(pulse*3)*0.35).toFixed(2);
+    ctx.font='14px "Press Start 2P",monospace';
+    ctx.fillStyle=`rgba(0,255,100,${alpha})`;
+    ctx.textAlign='center';
+    ctx.fillText('** SANCTUARY **', W/2, H/2+28);
+  }
+
+  ctx.restore();
+}
+
+// ================================================================
 // RENDER 3D SCENE
 // ================================================================
 function renderScene(dt) {
@@ -478,6 +674,8 @@ function renderScene(dt) {
     ctx.fillStyle='#ffff00'; ctx.textAlign='center';
     ctx.fillText(STATE.killMessage,W/2,H/2-40);
   }
+
+  renderHUD();
 }
 
 // ================================================================
