@@ -10,7 +10,7 @@ Font: "Press Start 2P" (Google Fonts).
 ## Build Phases
 - [x] Phase 1: Raycasting engine + player movement
 - [x] Phase 2: Maze generation + pellet placement
-- [ ] Phase 3: Enemy AI + collision
+- [x] Phase 3: Enemy AI + collision
 - [ ] Phase 4: Power-ups + combat
 - [ ] Phase 5: HUD + minimap
 - [ ] Phase 6: Screens + audio (combined to stay within token limits)
@@ -121,6 +121,21 @@ Font: "Press Start 2P" (Google Fonts).
 - Distance fog: walls darken by distance for depth cues (max 75% darkening)
 - Delta time: capped at 50ms/frame to prevent physics tunnelling on tab-out
 - Pellet collection: checked per-frame at player's current map cell
+
+### Phase 3
+- Ghost movement: cell-to-cell (targetCX/targetCY), prevents getting stuck
+- prevCX/prevCY tracks last cell — prevents immediate U-turns (ghosts feel more purposeful)
+- 3 ghost types: SHADOW_RAPTOR(chase), STONE_WYVERN(patrol/random), BONE_SPECTER(random)
+- Boss (level 3): hp=2, scale=1.3, turns pink (#ff00cc) after 1st hit
+- Frighten: global STATE.frightenTimer, ghosts slow 50%, run away from player
+- Frighten blink: ghosts flash white/blue in last 3 seconds (warns player it's ending)
+- Ghost drawing: column-by-column with ZBuffer test; body + eyes + pupils + 3-bump skirt
+- Attack: Space key rising-edge only (no auto-repeat on hold), range 1.2–1.5 units
+- Kill messages: per ghost type + boss stagger/vanquish messages
+- Player invincibility: 2s after being hit, 2s on spawn
+- Death flash: red screen overlay fades over 0.4s
+- isGhostWalkable: ghosts cannot enter map value 2 (safe rooms)
+- BUG NOTED: respawnGhost uses g.isboss (wrong case) instead of g.isBoss — fix in Phase 4
 
 ---
 

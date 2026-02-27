@@ -6,14 +6,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      background: #000;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-      overflow: hidden;
-    }
+    body { background: #000; display: flex; justify-content: center;
+           align-items: center; height: 100vh; overflow: hidden; }
     canvas { display: block; image-rendering: pixelated; }
   </style>
 </head>
@@ -25,104 +19,101 @@
 // ================================================================
 // CONSTANTS
 // ================================================================
-const W = 800, H = 600;
-const HALF_H = H / 2;
-const FOV      = Math.PI / 3;  // 60°
-const HALF_FOV = FOV / 2;
-const TAN_HALF = Math.tan(HALF_FOV); // precomputed for sprite projection
+const W = 800, H = 600, HALF_H = H / 2;
+const FOV = Math.PI / 3, HALF_FOV = FOV / 2;
+const TAN_HALF = Math.tan(HALF_FOV);
 const MAX_DEPTH = 24;
+const TWO_PI = Math.PI * 2;
 
 // ================================================================
 // GAME STATE
 // ================================================================
 const STATE = {
-  phase: 'PLAYING', // TITLE | PLAYING | LEVEL_COMPLETE | GAME_OVER
+  phase: 'PLAYING',         // TITLE | PLAYING | LEVEL_COMPLETE | GAME_OVER
   level: 1,
   score: 0,
   lives: 3,
+  frightenTimer:   0,       // > 0 = all ghosts frightened
+  playerInvincTimer: 0,     // > 0 = player temporarily invincible
+  killMessage: '',
+  killMessageTimer: 0,
+  deathFlashTimer: 0,       // red flash on screen when player is hit
 };
 
 // ================================================================
 // CHARACTER DEFINITIONS
 // ================================================================
 const CHARACTERS = {
-  DINO_WARRIOR: {
-    name: 'DINO WARRIOR', color: '#44ff44',
-    moveSpeed: 0.060, rotSpeed: 0.038,
-    attackPower: 1, hitsToKill: 2,
-  },
-  DRAGON_KNIGHT: {
-    name: 'DRAGON KNIGHT', color: '#ff4444',
-    moveSpeed: 0.040, rotSpeed: 0.030,
-    attackPower: 2, hitsToKill: 1,
-  },
-  PALEO_PACMAN: {
-    name: 'PALEO PACMAN', color: '#ffff44',
-    moveSpeed: 0.050, rotSpeed: 0.034,
-    attackPower: 1, hitsToKill: 1,
-  },
+  DINO_WARRIOR:  { name: 'DINO WARRIOR',  color: '#44ff44', moveSpeed: 0.060, rotSpeed: 0.038, hitsToKill: 2 },
+  DRAGON_KNIGHT: { name: 'DRAGON KNIGHT', color: '#ff4444', moveSpeed: 0.040, rotSpeed: 0.030, hitsToKill: 1 },
+  PALEO_PACMAN:  { name: 'PALEO PACMAN',  color: '#ffff44', moveSpeed: 0.050, rotSpeed: 0.034, hitsToKill: 1 },
 };
 let char = CHARACTERS.PALEO_PACMAN;
 
 // ================================================================
 // LEVEL CONFIGS
-// Logical room grid: (cols × rows).  Physical map: (2*cols+1) × (2*rows+1)
 // ================================================================
 const LEVEL_CONFIGS = {
-  1: { cols: 8,  rows: 8,  name: 'CRETACEOUS CAVERNS', ghostCount: 3 },
-  2: { cols: 11, rows: 11, name: 'MESOZOIC MINES',      ghostCount: 5 },
-  3: { cols: 14, rows: 14, name: "DRAGON'S LAIR",       ghostCount: 7 },
+  1: { cols: 8,  rows: 8,  name: 'CRETACEOUS CAVERNS', ghostCount: 3, baseSpeed: 1.0 },
+  2: { cols: 11, rows: 11, name: 'MESOZOIC MINES',      ghostCount: 5, baseSpeed: 1.3 },
+  3: { cols: 14, rows: 14, name: "DRAGON'S LAIR",       ghostCount: 6, baseSpeed: 1.6 },
 };
 
 // ================================================================
-// MAP DATA  (reassigned by initLevel)
-// map[y][x]: 0=open  1=wall  2=safe room
-// pelletGrid[y][x]: 0=none  1=small pellet  2=power pellet
+// GHOST TYPE DEFINITIONS
 // ================================================================
-let map         = [];
-let MAP_W       = 0;
-let MAP_H       = 0;
-let pelletGrid  = [];
-let pelletsLeft = 0;
-let safeRoomSet = new Set(); // "x,y" keys of safe-room cells (map value 2)
+const GHOST_TYPES = {
+  SHADOW_RAPTOR: { ai: 'chase',   speedMult: 1.2, color: '#ff6600', killMsg: 'SHADOW RAPTOR SLAIN!' },
+  STONE_WYVERN:  { ai: 'patrol',  speedMult: 0.9, color: '#6688cc', killMsg: 'WYVERN BANISHED!' },
+  BONE_SPECTER:  { ai: 'random',  speedMult: 0.7, color: '#dddddd', killMsg: 'SPECTER DISPERSED!' },
+};
+const GHOST_TYPE_KEYS = ['SHADOW_RAPTOR', 'STONE_WYVERN', 'BONE_SPECTER'];
+
+// ================================================================
+// MAP DATA  (reassigned by initLevel each level)
+// map[y][x]:  0=open  1=wall  2=safe room (ghosts can't enter)
+// pelletGrid[y][x]:  0=none  1=small pellet  2=power pellet
+// ================================================================
+let map = [], MAP_W = 0, MAP_H = 0;
+let pelletGrid = [], pelletsLeft = 0;
+let safeRoomSet = new Set();
+let ghosts = [];
+
+// ================================================================
+// HELPERS
+// ================================================================
+const dist2 = (x1, y1, x2, y2) => { const dx=x1-x2, dy=y1-y2; return dx*dx+dy*dy; };
+const dist  = (x1, y1, x2, y2) => Math.sqrt(dist2(x1,y1,x2,y2));
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
 
 // ================================================================
 // MAZE GENERATOR — recursive backtracker (DFS)
-//
-// Creates a "perfect" maze (all cells reachable, no loops) then
-// adds ~12% extra passages to create the loops needed for good gameplay.
-//
-// Physical grid coords:
-//   Logical cell (c, r)  →  physical (2c+1, 2r+1)
-//   Wall between (c,r) and (c+1,r)  →  physical (2c+2, 2r+1)
+// Physical grid size: (2*cols+1) × (2*rows+1)
+// Logical cell (c,r) → physical center (2c+1, 2r+1)
 // ================================================================
 function generateMaze(cols, rows) {
-  const mw = cols * 2 + 1;
-  const mh = rows * 2 + 1;
-
-  // Start all as walls
+  const mw = cols * 2 + 1, mh = rows * 2 + 1;
   const grid = Array.from({ length: mh }, () => new Array(mw).fill(1));
-
   const visited = Array.from({ length: rows }, () => new Array(cols).fill(false));
-  const stack   = [[0, 0]];
+  const stack = [[0, 0]];
   visited[0][0] = true;
-  grid[1][1]    = 0; // open start cell
+  grid[1][1] = 0;
 
-  const dirs = [[0,-1],[1,0],[0,1],[-1,0]]; // up right down left
-
+  const DIRS = [[0,-1],[1,0],[0,1],[-1,0]];
   while (stack.length > 0) {
     const [cx, cy] = stack[stack.length - 1];
-
-    // Shuffle directions for organic-looking mazes
-    const shuffled = dirs.slice().sort(() => Math.random() - 0.5);
+    const shuffled = DIRS.slice().sort(() => Math.random() - 0.5);
     let moved = false;
-
     for (const [dx, dy] of shuffled) {
       const nx = cx + dx, ny = cy + dy;
       if (nx >= 0 && nx < cols && ny >= 0 && ny < rows && !visited[ny][nx]) {
-        // Carve passage: open the wall between current and neighbor
         grid[cy * 2 + 1 + dy][cx * 2 + 1 + dx] = 0;
-        // Open the neighbor cell itself
         grid[ny * 2 + 1][nx * 2 + 1] = 0;
         visited[ny][nx] = true;
         stack.push([nx, ny]);
@@ -130,104 +121,126 @@ function generateMaze(cols, rows) {
         break;
       }
     }
-
-    if (!moved) stack.pop(); // dead end — backtrack
+    if (!moved) stack.pop();
   }
 
-  // Add extra passages to create loops (improves Pacman-style gameplay)
-  // Only removes wall cells that separate two open cells (prevents dead pockets)
+  // Add ~12% extra passages to create gameplay loops
   for (let y = 2; y < mh - 2; y++) {
     for (let x = 2; x < mw - 2; x++) {
-      if (grid[y][x] !== 1) continue;
-      if (Math.random() > 0.12) continue;
-
-      const hLoop = grid[y][x-1] === 0 && grid[y][x+1] === 0;
-      const vLoop = grid[y-1][x] === 0 && grid[y+1][x] === 0;
-      if (hLoop || vLoop) grid[y][x] = 0;
+      if (grid[y][x] !== 1 || Math.random() > 0.12) continue;
+      if ((grid[y][x-1] === 0 && grid[y][x+1] === 0) ||
+          (grid[y-1][x] === 0 && grid[y+1][x] === 0)) grid[y][x] = 0;
     }
   }
-
   return grid;
 }
 
 // ================================================================
 // LEVEL INITIALISER
-// Generates maze, places safe rooms, fills pellet grid,
-// sets player start position.
 // ================================================================
 function initLevel(levelNum) {
   const cfg = LEVEL_CONFIGS[levelNum];
+  map   = generateMaze(cfg.cols, cfg.rows);
+  MAP_W = map[0].length;
+  MAP_H = map.length;
 
-  // Generate the physical maze grid
-  const grid = generateMaze(cfg.cols, cfg.rows);
-
-  map   = grid;
-  MAP_W = grid[0].length;
-  MAP_H = grid.length;
-
+  // --- Safe rooms ---
   safeRoomSet = new Set();
-
-  // --- Place 2 safe rooms at random interior logical cells ---
-  // Avoid cell (0,0) which is the player start
   const roomCandidates = [];
   for (let r = 0; r < cfg.rows; r++) {
     for (let c = 0; c < cfg.cols; c++) {
-      if (r === 0 && c === 0) continue; // skip spawn
+      if (r === 0 && c === 0) continue;
       const px = c * 2 + 1, py = r * 2 + 1;
       if (map[py][px] === 0) roomCandidates.push([px, py]);
     }
   }
-  // Fisher-Yates shuffle, take first 2
-  for (let i = roomCandidates.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [roomCandidates[i], roomCandidates[j]] = [roomCandidates[j], roomCandidates[i]];
-  }
+  shuffle(roomCandidates);
   for (let i = 0; i < 2 && i < roomCandidates.length; i++) {
     const [sx, sy] = roomCandidates[i];
-    map[sy][sx] = 2; // mark as safe room
+    map[sy][sx] = 2;
     safeRoomSet.add(`${sx},${sy}`);
   }
 
-  // --- Build pellet grid ---
+  // --- Pellet grid ---
   pelletGrid = Array.from({ length: MAP_H }, () => new Array(MAP_W).fill(0));
   pelletsLeft = 0;
 
-  // Power pellets: place up to 6, spaced away from spawn
-  const powerPelletCells = [];
-  for (let y = 1; y < MAP_H - 1; y++) {
-    for (let x = 1; x < MAP_W - 1; x++) {
-      if (map[y][x] === 0 && (x > 3 || y > 3)) {
-        powerPelletCells.push([x, y]);
-      }
-    }
-  }
-  for (let i = powerPelletCells.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [powerPelletCells[i], powerPelletCells[j]] = [powerPelletCells[j], powerPelletCells[i]];
-  }
-  const maxPower = Math.min(6, Math.floor(powerPelletCells.length * 0.04));
-  for (let i = 0; i < maxPower; i++) {
-    const [x, y] = powerPelletCells[i];
+  // Power pellets (max 6, spaced from spawn)
+  const powerCells = [];
+  for (let y = 1; y < MAP_H - 1; y++)
+    for (let x = 1; x < MAP_W - 1; x++)
+      if (map[y][x] === 0 && (x > 3 || y > 3)) powerCells.push([x, y]);
+  shuffle(powerCells);
+  const maxPwr = Math.min(6, Math.floor(powerCells.length * 0.04));
+  for (let i = 0; i < maxPwr; i++) {
+    const [x, y] = powerCells[i];
     pelletGrid[y][x] = 2;
+    pelletsLeft++;
   }
 
-  // Small pellets: all remaining open cells (value 0) except player spawn area
+  // Small pellets — all remaining open cells except spawn area
   for (let y = 1; y < MAP_H - 1; y++) {
     for (let x = 1; x < MAP_W - 1; x++) {
       if (map[y][x] === 0 && pelletGrid[y][x] === 0) {
-        // Skip the 3x3 area around spawn so player isn't immediately collecting
         if (x <= 2 && y <= 2) continue;
         pelletGrid[y][x] = 1;
         pelletsLeft++;
       }
-      if (pelletGrid[y][x] === 2) pelletsLeft++; // count power pellets too
     }
   }
 
-  // --- Reset player to spawn ---
-  player.x     = 1.5;
-  player.y     = 1.5;
-  player.angle = 0;
+  // --- Spawn ghosts ---
+  spawnGhosts(levelNum, cfg);
+
+  // --- Reset player ---
+  player.x = 1.5; player.y = 1.5; player.angle = 0;
+  STATE.frightenTimer = 0;
+  STATE.playerInvincTimer = 2.0; // brief invincibility on spawn
+  STATE.killMessage = '';
+  STATE.killMessageTimer = 0;
+}
+
+function spawnGhosts(levelNum, cfg) {
+  ghosts = [];
+  const baseSpeed = cfg.baseSpeed;
+
+  // Find spawn cells well away from player start
+  const spawnPool = [];
+  for (let y = 1; y < MAP_H - 1; y++)
+    for (let x = 1; x < MAP_W - 1; x++)
+      if (map[y][x] === 0 && dist(x+0.5, y+0.5, 1.5, 1.5) > 5)
+        spawnPool.push([x, y]);
+  shuffle(spawnPool);
+
+  let idx = 0;
+
+  // Boss ghost (level 3 only)
+  if (levelNum === 3 && idx < spawnPool.length) {
+    const [cx, cy] = spawnPool[idx++];
+    ghosts.push(makeGhost('BOSS', cx, cy, baseSpeed * 1.5, 'chase', 2, '#aa00ff', 1.3, true));
+  }
+
+  // Regular ghosts
+  for (let i = 0; i < cfg.ghostCount && idx < spawnPool.length; i++, idx++) {
+    const tkey  = GHOST_TYPE_KEYS[i % 3];
+    const tdef  = GHOST_TYPES[tkey];
+    const [cx, cy] = spawnPool[idx];
+    ghosts.push(makeGhost(tkey, cx, cy, baseSpeed * tdef.speedMult, tdef.ai, 1, tdef.color, 1.0, false));
+  }
+}
+
+/** Factory for a ghost object. */
+function makeGhost(type, cx, cy, speed, ai, hp, color, scale, isBoss) {
+  return {
+    type, ai, speed, hp, color, scale, isBoss,
+    x: cx + 0.5, y: cy + 0.5,
+    targetCX: cx, targetCY: cy,  // current cell target
+    prevCX: cx, prevCY: cy,      // last cell (prevents immediate reversal)
+    baseColor: color,             // remembered for reset after boss hit
+    dead: false, deadTimer: 0,
+    spawnX: cx + 0.5, spawnY: cy + 0.5,
+    hitTimer: 0,
+  };
 }
 
 // ================================================================
@@ -235,185 +248,221 @@ function initLevel(levelNum) {
 // ================================================================
 const player = { x: 1.5, y: 1.5, angle: 0 };
 
+// Space-bar attack: rising edge detection
+let prevSpaceDown = false;
+
 // ================================================================
 // INPUT
 // ================================================================
 const keys = {};
 window.addEventListener('keydown', e => {
   keys[e.code] = true;
-  const gameKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',
-                    'KeyW','KeyA','KeyS','KeyD','Space'];
+  const gameKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','KeyW','KeyA','KeyS','KeyD','Space'];
   if (gameKeys.includes(e.code)) e.preventDefault();
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 
 // ================================================================
-// RAYCASTING ENGINE — DDA
+// CANVAS + RAYCASTING ENGINE — DDA
 // ================================================================
 const canvas = document.getElementById('game');
 const ctx    = canvas.getContext('2d');
-
-// Z-buffer: stores perpendicular wall distance for each screen column.
-// Sprite columns are only drawn where they are closer than the wall.
 const zBuffer = new Float32Array(W);
 
-/**
- * Cast a ray and return perpendicular wall distance + side hit.
- * Also handles safe-room walls (value 2) as solid walls.
- */
 function castRay(angle) {
-  angle = ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
-
-  const cosA = Math.cos(angle);
-  const sinA = Math.sin(angle);
-
-  let mapX = Math.floor(player.x);
-  let mapY = Math.floor(player.y);
-
-  const deltaDistX = cosA === 0 ? 1e30 : Math.abs(1 / cosA);
-  const deltaDistY = sinA === 0 ? 1e30 : Math.abs(1 / sinA);
-
-  let stepX, stepY, sideDistX, sideDistY;
-
-  if (cosA < 0) { stepX = -1; sideDistX = (player.x - mapX) * deltaDistX; }
-  else          { stepX =  1; sideDistX = (mapX + 1.0 - player.x) * deltaDistX; }
-
-  if (sinA < 0) { stepY = -1; sideDistY = (player.y - mapY) * deltaDistY; }
-  else          { stepY =  1; sideDistY = (mapY + 1.0 - player.y) * deltaDistY; }
-
+  angle = ((angle % TWO_PI) + TWO_PI) % TWO_PI;
+  const cosA = Math.cos(angle), sinA = Math.sin(angle);
+  let mapX = Math.floor(player.x), mapY = Math.floor(player.y);
+  const ddx = cosA === 0 ? 1e30 : Math.abs(1 / cosA);
+  const ddy = sinA === 0 ? 1e30 : Math.abs(1 / sinA);
+  let stepX, stepY, sdx, sdy;
+  if (cosA < 0) { stepX = -1; sdx = (player.x - mapX) * ddx; }
+  else          { stepX =  1; sdx = (mapX + 1.0 - player.x) * ddx; }
+  if (sinA < 0) { stepY = -1; sdy = (player.y - mapY) * ddy; }
+  else          { stepY =  1; sdy = (mapY + 1.0 - player.y) * ddy; }
   let side = 0, hit = false;
-
   for (let i = 0; i < MAX_DEPTH * 12 && !hit; i++) {
-    if (sideDistX < sideDistY) { sideDistX += deltaDistX; mapX += stepX; side = 0; }
-    else                       { sideDistY += deltaDistY; mapY += stepY; side = 1; }
-
+    if (sdx < sdy) { sdx += ddx; mapX += stepX; side = 0; }
+    else           { sdy += ddy; mapY += stepY; side = 1; }
     if (mapX < 0 || mapX >= MAP_W || mapY < 0 || mapY >= MAP_H) break;
     if (map[mapY][mapX] === 1) hit = true;
   }
-
   if (!hit) return { dist: MAX_DEPTH, side: 0 };
-
-  let perpDist;
-  if (side === 0) perpDist = (mapX - player.x + (1 - stepX) / 2) / cosA;
-  else            perpDist = (mapY - player.y + (1 - stepY) / 2) / sinA;
-
-  return { dist: Math.abs(perpDist), side };
+  let pd;
+  if (side === 0) pd = (mapX - player.x + (1 - stepX) / 2) / cosA;
+  else            pd = (mapY - player.y + (1 - stepY) / 2) / sinA;
+  return { dist: Math.abs(pd), side };
 }
 
 // ================================================================
-// WALL PALETTES  (colored rectangles — no bitmaps)
+// WALL PALETTES
 // ================================================================
 const WALL_PALETTES = {
-  1: { bright: [160,  90,  40], dark: [ 88,  50, 22] }, // CRETACEOUS: warm brown
-  2: { bright: [ 80,  90, 110], dark: [ 44,  50, 60] }, // MESOZOIC:   slate blue-grey
-  3: { bright: [160,  30,  30], dark: [ 88,  16, 16] }, // DRAGON'S:   deep red
+  1: { bright: [160,  90,  40], dark: [ 88,  50, 22] },
+  2: { bright: [ 80,  90, 110], dark: [ 44,  50, 60] },
+  3: { bright: [160,  30,  30], dark: [ 88,  16, 16] },
 };
 
 // ================================================================
-// SPRITE PROJECTION UTIL
-// Projects a world-space (wx, wy) point into camera space.
-// Returns { transformX, transformZ } where transformZ is depth.
-//
-// Uses Lode's raycasting tutorial camera transform.
-// Camera plane half-width = TAN_HALF (tan of half FOV).
+// SPRITE PROJECTION  (Lode's raycasting camera transform)
 // ================================================================
 function projectPoint(wx, wy) {
-  const dx   = wx - player.x;
-  const dy   = wy - player.y;
-  const dirX = Math.cos(player.angle);
-  const dirY = Math.sin(player.angle);
+  const dx = wx - player.x, dy = wy - player.y;
+  const dirX = Math.cos(player.angle), dirY = Math.sin(player.angle);
+  const planeX = -dirY * TAN_HALF, planeY = dirX * TAN_HALF;
+  const inv = 1.0 / (planeX * dirY - dirX * planeY);
+  return {
+    transformX: inv * ( dirY * dx - dirX * dy),
+    transformZ: inv * (-planeY * dx + planeX * dy),
+  };
+}
 
-  // Camera plane vectors (perpendicular to view direction)
-  const planeX = -dirY * TAN_HALF;
-  const planeY =  dirX * TAN_HALF;
+// ================================================================
+// GHOST SPRITE DRAWING
+// Draws ghost as canvas-drawn colored billboard (no image files):
+//   - Rectangular body with rounded dome top
+//   - Two white eyes with dark pupils
+//   - 3-bump wavy skirt at bottom
+// Column-by-column rendering allows ZBuffer depth testing.
+// ================================================================
+function drawGhostSprite(g, tx, tz) {
+  const baseH  = Math.abs(Math.floor(H / tz));
+  const sh     = Math.floor(baseH * g.scale);
+  const sw     = sh;
+  const screenX = Math.floor((W / 2) * (1 + tx / tz));
+  const left   = screenX - (sw >> 1);
+  const right  = left + sw;
+  const top    = HALF_H - (sh >> 1);
 
-  // Determinant of camera matrix (should never be 0 for valid angles)
-  const invDet = 1.0 / (planeX * dirY - dirX * planeY);
+  if (right < 0 || left >= W || sh < 2) return;
 
-  const transformX = invDet * ( dirY * dx - dirX * dy);
-  const transformZ = invDet * (-planeY * dx + planeX * dy);
+  // Frightened color logic: blue, blinking white in last 3s
+  const frightened = STATE.frightenTimer > 0;
+  const blinking   = frightened && STATE.frightenTimer < 3 && Math.floor(pulse * 4) % 2 === 0;
+  const bodyColor  = frightened ? (blinking ? '#ffffff' : '#0055ff') : g.color;
+  const eyeColor   = frightened ? '#ff3333' : '#ffffff';
+  const pupilColor = frightened ? '#ffffff' : '#000033';
 
-  return { transformX, transformZ };
+  // Precomputed row values to avoid per-column recalc
+  const eyeTop    = top + Math.floor(sh * 0.20);
+  const eyeBot    = top + Math.floor(sh * 0.42);
+  const pupilTop  = top + Math.floor(sh * 0.28);
+  const pupilBot  = top + Math.floor(sh * 0.40);
+  const bodyBot   = top + Math.floor(sh * 0.80);
+  const skirtBot  = top + sh;
+  const bodyTop   = top + Math.floor(sh * 0.04);
+
+  for (let sx = Math.max(0, left); sx < Math.min(W, right); sx++) {
+    if (tz >= zBuffer[sx]) continue; // occluded by wall
+
+    const relX = (sx - left) / sw;
+
+    // Outside body width? Skip.
+    if (relX < 0.08 || relX > 0.92) continue;
+
+    // Main body
+    ctx.fillStyle = bodyColor;
+    ctx.fillRect(sx, bodyTop, 1, bodyBot - bodyTop);
+
+    // Wavy 3-bump skirt — skip the two narrow gaps between bumps
+    const inGap = (relX > 0.32 && relX < 0.38) || (relX > 0.62 && relX < 0.68);
+    if (!inGap) ctx.fillRect(sx, bodyBot, 1, skirtBot - bodyBot);
+
+    // Eyes: left eye relX [0.14, 0.38], right eye [0.62, 0.86]
+    const inLeftEye  = relX >= 0.14 && relX <= 0.38;
+    const inRightEye = relX >= 0.62 && relX <= 0.86;
+    if (inLeftEye || inRightEye) {
+      ctx.fillStyle = eyeColor;
+      ctx.fillRect(sx, eyeTop, 1, eyeBot - eyeTop);
+
+      // Pupils — inner portion of each eye
+      const inLeftPupil  = relX >= 0.20 && relX <= 0.33;
+      const inRightPupil = relX >= 0.67 && relX <= 0.80;
+      if (inLeftPupil || inRightPupil) {
+        ctx.fillStyle = pupilColor;
+        ctx.fillRect(sx, pupilTop, 1, pupilBot - pupilTop);
+      }
+    }
+  }
+
+  // Boss HP bar: shown when boss has taken 1 hit (hp == 1, max is 2)
+  if (g.isBoss && g.hp < 2) {
+    const barY = top + sh + 4;
+    ctx.fillStyle = '#ff4444';
+    ctx.fillRect(screenX - 12, barY, 24, 4);
+    ctx.fillStyle = '#ff8800';
+    ctx.fillRect(screenX - 12, barY, 12, 4); // half-bar = 1/2 hp
+  }
 }
 
 // ================================================================
 // SPRITE RENDERER
-// Draws billboard sprites (pellets, later: enemies) depth-tested
-// against the zBuffer filled by the wall pass.
+// Collects pellets + ghosts, depth-sorts, draws with ZBuffer test.
 // ================================================================
-
-// Pulsing animation time (seconds)
 let pulse = 0;
 
 function renderSprites(dt) {
   pulse += dt;
+  const all = [];
 
-  // Collect visible sprite positions from pelletGrid
-  const sprites = [];
-
+  // Pellets
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
       const p = pelletGrid[y][x];
       if (!p) continue;
-
-      const wx = x + 0.5, wy = y + 0.5;
-      const { transformX, transformZ } = projectPoint(wx, wy);
-
-      // Cull sprites behind the camera or too far
-      if (transformZ < 0.1 || transformZ > MAX_DEPTH) continue;
-
-      sprites.push({ wx, wy, type: p, transformX, transformZ });
+      const { transformX: tx, transformZ: tz } = projectPoint(x + 0.5, y + 0.5);
+      if (tz < 0.1 || tz > MAX_DEPTH) continue;
+      all.push({ kind: 'p', subtype: p, tx, tz });
     }
   }
 
-  // Sort far-to-near so overlapping sprites paint correctly
-  sprites.sort((a, b) => b.transformZ - a.transformZ);
+  // Ghosts
+  for (const g of ghosts) {
+    if (g.dead) continue;
+    const { transformX: tx, transformZ: tz } = projectPoint(g.x, g.y);
+    if (tz < 0.1 || tz > MAX_DEPTH) continue;
+    all.push({ kind: 'g', g, tx, tz });
+  }
 
-  for (const s of sprites) {
-    const { transformX, transformZ, type } = s;
+  // Far-to-near sort (painter's algorithm — ZBuffer handles actual depth)
+  all.sort((a, b) => b.tz - a.tz);
 
-    // Sprite screen-space size (same projection formula as wall strips)
-    const spriteH = Math.abs(Math.floor(H / transformZ));
-    const spriteW = spriteH;
+  for (const s of all) {
+    if (s.kind === 'g') {
+      drawGhostSprite(s.g, s.tx, s.tz);
+    } else {
+      // Pellet drawing
+      const sh = Math.abs(Math.floor(H / s.tz));
+      const sw = sh;
+      const sx0 = Math.floor((W / 2) * (1 + s.tx / s.tz));
+      const left = sx0 - (sw >> 1);
+      const right = left + sw;
+      if (right < 0 || left >= W) continue;
 
-    // Horizontal center on screen
-    const screenX = Math.floor((W / 2) * (1 + transformX / transformZ));
-
-    const left   = screenX - (spriteW >> 1);
-    const right  = left + spriteW;
-    const top    = HALF_H - (spriteH >> 1);
-
-    if (right < 0 || left >= W) continue; // fully off screen
-
-    if (type === 1) {
-      // Small pellet — tiny yellow dot in the sprite center
-      const dotH = Math.max(2, Math.floor(spriteH * 0.18));
-      const dotW = Math.max(1, Math.floor(spriteW * 0.18));
-      const dotY = HALF_H - (dotH >> 1);
-
-      ctx.fillStyle = '#ffe632';
-
-      for (let sx = Math.max(0, left); sx < Math.min(W, right); sx++) {
-        if (transformZ >= zBuffer[sx]) continue; // wall is closer
-        const relX = (sx - left) / spriteW;
-        if (relX < 0.41 || relX > 0.59) continue; // only center columns
-        ctx.fillRect(sx, dotY, 1, dotH);
-      }
-
-    } else if (type === 2) {
-      // Power pellet — larger cyan orb with pulsing size
-      const scale  = 0.22 + Math.sin(pulse * 4) * 0.06;
-      const dotH   = Math.max(4, Math.floor(spriteH * scale));
-      const dotY   = HALF_H - (dotH >> 1);
-      const alpha  = 0.75 + Math.sin(pulse * 4) * 0.25;
-
-      ctx.fillStyle = `rgba(0, 255, 200, ${alpha.toFixed(2)})`;
-
-      for (let sx = Math.max(0, left); sx < Math.min(W, right); sx++) {
-        if (transformZ >= zBuffer[sx]) continue;
-        const relX = (sx - left) / spriteW;
-        if (relX < 0.3 || relX > 0.7) continue; // center 40% of sprite width
-        ctx.fillRect(sx, dotY, 1, dotH);
+      if (s.subtype === 1) {
+        // Small pellet: tiny yellow dot
+        const dh = Math.max(2, Math.floor(sh * 0.18));
+        const dy = HALF_H - (dh >> 1);
+        ctx.fillStyle = '#ffe632';
+        for (let x = Math.max(0, left); x < Math.min(W, right); x++) {
+          if (s.tz >= zBuffer[x]) continue;
+          const r = (x - left) / sw;
+          if (r < 0.41 || r > 0.59) continue;
+          ctx.fillRect(x, dy, 1, dh);
+        }
+      } else {
+        // Power pellet: pulsing cyan orb
+        const scale = 0.22 + Math.sin(pulse * 4) * 0.06;
+        const dh    = Math.max(4, Math.floor(sh * scale));
+        const dy    = HALF_H - (dh >> 1);
+        const alpha = (0.75 + Math.sin(pulse * 4) * 0.25).toFixed(2);
+        ctx.fillStyle = `rgba(0,255,200,${alpha})`;
+        for (let x = Math.max(0, left); x < Math.min(W, right); x++) {
+          if (s.tz >= zBuffer[x]) continue;
+          const r = (x - left) / sw;
+          if (r < 0.3 || r > 0.7) continue;
+          ctx.fillRect(x, dy, 1, dh);
+        }
       }
     }
   }
@@ -421,100 +470,252 @@ function renderSprites(dt) {
 
 // ================================================================
 // RENDER 3D SCENE
-// Fills zBuffer during wall pass, then renders sprites on top.
 // ================================================================
 function renderScene(dt) {
-  const palette = WALL_PALETTES[STATE.level] || WALL_PALETTES[1];
+  const pal = WALL_PALETTES[STATE.level] || WALL_PALETTES[1];
 
-  // Ceiling
-  ctx.fillStyle = '#0d0d1a';
-  ctx.fillRect(0, 0, W, HALF_H);
+  ctx.fillStyle = '#0d0d1a'; ctx.fillRect(0, 0, W, HALF_H);   // ceiling
+  ctx.fillStyle = '#1a0e06'; ctx.fillRect(0, HALF_H, W, HALF_H); // floor
 
-  // Floor
-  ctx.fillStyle = '#1a0e06';
-  ctx.fillRect(0, HALF_H, W, HALF_H);
-
-  // Wall strips — one per screen column
   for (let x = 0; x < W; x++) {
-    const rayAngle = player.angle - HALF_FOV + (x / W) * FOV;
-    const { dist, side } = castRay(rayAngle);
-
-    zBuffer[x] = dist; // store for sprite depth test
-
-    const wallH   = Math.min(H, Math.floor(H / dist));
-    const wallTop = HALF_H - (wallH >> 1);
-
-    // Distance fog: walls darken with depth for better spatial reading
-    const fog   = Math.min(1, dist / MAX_DEPTH);
-    const shade = (side === 1 ? 0.55 : 1.0) * (1 - fog * 0.75);
-
-    const [pr, pg, pb] = palette.bright;
-    const r = Math.floor(pr * shade);
-    const g = Math.floor(pg * shade);
-    const b = Math.floor(pb * shade);
-
-    ctx.fillStyle = `rgb(${r},${g},${b})`;
-    ctx.fillRect(x, wallTop, 1, wallH);
+    const { dist: d, side } = castRay(player.angle - HALF_FOV + (x / W) * FOV);
+    zBuffer[x] = d;
+    const wh  = Math.min(H, Math.floor(H / d));
+    const fog = Math.min(1, d / MAX_DEPTH);
+    const sh  = (side === 1 ? 0.55 : 1.0) * (1 - fog * 0.75);
+    const [pr, pg, pb] = pal.bright;
+    ctx.fillStyle = `rgb(${Math.floor(pr*sh)},${Math.floor(pg*sh)},${Math.floor(pb*sh)})`;
+    ctx.fillRect(x, HALF_H - (wh >> 1), 1, wh);
   }
 
-  // Sprites on top of walls (depth-tested via zBuffer)
   renderSprites(dt);
+
+  // Death flash overlay
+  if (STATE.deathFlashTimer > 0) {
+    const alpha = (STATE.deathFlashTimer / 0.4).toFixed(2);
+    ctx.fillStyle = `rgba(220,0,0,${alpha})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Kill message
+  if (STATE.killMessageTimer > 0) {
+    ctx.font = '12px "Press Start 2P", monospace';
+    ctx.fillStyle = '#ffff00';
+    ctx.textAlign = 'center';
+    ctx.fillText(STATE.killMessage, W / 2, H / 2 - 40);
+  }
 }
 
 // ================================================================
-// PLAYER MOVEMENT + COLLISION + PELLET COLLECTION
+// WALKABILITY
 // ================================================================
-
-// Check if map cell (mx, my) is walkable (not a wall)
 function isWalkable(mx, my) {
   if (mx < 0 || mx >= MAP_W || my < 0 || my >= MAP_H) return false;
-  return map[my][mx] !== 1; // 0 = open, 2 = safe room — both walkable
+  return map[my][mx] !== 1;
 }
 
-function updatePlayer() {
+// Ghosts cannot enter safe rooms (map value 2)
+function isGhostWalkable(mx, my) {
+  if (mx < 0 || mx >= MAP_W || my < 0 || my >= MAP_H) return false;
+  return map[my][mx] === 0;
+}
+
+// ================================================================
+// GHOST AI — cell-to-cell movement
+// Each ghost always moves toward a target cell center.
+// When it arrives, pickNextCell() selects the next one.
+// This prevents ghosts from ever getting stuck.
+// ================================================================
+function pickNextCell(g) {
+  const cx = Math.floor(g.x), cy = Math.floor(g.y);
+  const DIRS = [[-1,0],[1,0],[0,-1],[0,1]];
+
+  // Open walkable neighbors — exclude the cell we just came from (no U-turns)
+  // unless that's the only option
+  const avoidPrev = DIRS.filter(([dx, dy]) => {
+    const nx = cx + dx, ny = cy + dy;
+    return isGhostWalkable(nx, ny) && !(nx === g.prevCX && ny === g.prevCY);
+  });
+  const options = avoidPrev.length > 0
+    ? avoidPrev
+    : DIRS.filter(([dx, dy]) => isGhostWalkable(cx + dx, cy + dy));
+
+  if (options.length === 0) return;
+
+  let chosen;
+  const frightened = STATE.frightenTimer > 0;
+
+  if (frightened) {
+    // Run away: pick direction farthest from player
+    chosen = options.reduce((b, d) => {
+      const db = dist2(cx+b[0]+0.5, cy+b[1]+0.5, player.x, player.y);
+      const dd = dist2(cx+d[0]+0.5, cy+d[1]+0.5, player.x, player.y);
+      return dd > db ? d : b;
+    });
+  } else if ((g.ai === 'chase' || g.isBoss) && Math.random() < 0.75) {
+    // Chase: pick direction closest to player
+    chosen = options.reduce((b, d) => {
+      const db = dist2(cx+b[0]+0.5, cy+b[1]+0.5, player.x, player.y);
+      const dd = dist2(cx+d[0]+0.5, cy+d[1]+0.5, player.x, player.y);
+      return dd < db ? d : b;
+    });
+  } else {
+    // Random / patrol
+    chosen = options[Math.floor(Math.random() * options.length)];
+  }
+
+  g.prevCX  = cx;
+  g.prevCY  = cy;
+  g.targetCX = cx + chosen[0];
+  g.targetCY = cy + chosen[1];
+}
+
+function updateGhosts(dt) {
+  // Update global frighten timer
+  if (STATE.frightenTimer > 0) STATE.frightenTimer -= dt;
+
+  for (const g of ghosts) {
+    if (g.dead) {
+      g.deadTimer -= dt;
+      if (g.deadTimer <= 0) respawnGhost(g);
+      continue;
+    }
+
+    if (g.hitTimer > 0) g.hitTimer -= dt;
+
+    const speed = STATE.frightenTimer > 0 ? g.speed * 0.5 : g.speed;
+
+    // Move toward target cell center
+    const tx = g.targetCX + 0.5, ty = g.targetCY + 0.5;
+    const dx = tx - g.x, dy = ty - g.y;
+    const d  = Math.sqrt(dx * dx + dy * dy);
+
+    if (d < speed * dt + 0.06) {
+      // Arrived — snap and pick next
+      g.x = tx; g.y = ty;
+      pickNextCell(g);
+    } else {
+      g.x += (dx / d) * speed * dt;
+      g.y += (dy / d) * speed * dt;
+    }
+
+    // Ghost-player collision
+    if (STATE.playerInvincTimer > 0) continue;
+    if (dist(g.x, g.y, player.x, player.y) < 0.55) {
+      if (STATE.frightenTimer <= 0) playerHit();
+    }
+  }
+}
+
+function respawnGhost(g) {
+  g.x = g.spawnX; g.y = g.spawnY;
+  g.targetCX = Math.floor(g.spawnX); g.targetCY = Math.floor(g.spawnY);
+  g.prevCX   = g.targetCX; g.prevCY = g.targetCY;
+  g.hp    = g.isBoss ? 2 : 1;
+  g.color = g.baseColor;
+  g.dead  = false; g.hitTimer = 0;
+}
+
+function playerHit() {
+  STATE.lives--;
+  STATE.playerInvincTimer = 2.0;
+  STATE.deathFlashTimer   = 0.4;
+  if (STATE.lives <= 0) STATE.phase = 'GAME_OVER';
+}
+
+// ================================================================
+// PLAYER ATTACK  (Space key)
+// Attacks the nearest frightened ghost within range.
+// Attack range scales with character's hitsToKill value:
+//   hitsToKill=1 → range 1.5u, hitsToKill=2 → range 1.2u (weaker reach)
+// ================================================================
+function handleAttack() {
+  const range = char.hitsToKill === 1 ? 1.5 : 1.2;
+
+  if (STATE.frightenTimer <= 0) return; // no frightened ghosts
+
+  let closest = null, closestDist = range;
+  for (const g of ghosts) {
+    if (g.dead) continue;
+    const d = dist(g.x, g.y, player.x, player.y);
+    if (d < closestDist) { closestDist = d; closest = g; }
+  }
+
+  if (!closest) return;
+
+  // Deal 1 damage (character with hitsToKill=2 deals 1 damage, same as others —
+  // the stat affects how many player hits it takes, NOT ghost HP)
+  closest.hp--;
+
+  if (closest.hp <= 0) {
+    // Ghost slain
+    const ghType = GHOST_TYPES[closest.type];
+    const msg = closest.isBoss ? 'DRAGON SPECTER VANQUISHED!' : (ghType ? ghType.killMsg : 'GHOST SLAIN!');
+    STATE.score += closest.isBoss ? 1000 : 200;
+    STATE.killMessage = msg;
+    STATE.killMessageTimer = 2.0;
+    closest.dead = true;
+    closest.deadTimer = 5.0; // respawn after 5s
+  } else {
+    // Boss took 1 hit — change color to signal damage
+    closest.color = '#ff00cc';
+    STATE.score += 50;
+    STATE.killMessage = 'BOSS STAGGERED!';
+    STATE.killMessageTimer = 1.5;
+    closest.hitTimer = 0.3;
+  }
+}
+
+// ================================================================
+// PLAYER UPDATE
+// ================================================================
+function updatePlayer(dt) {
   const { moveSpeed, rotSpeed } = char;
 
   if (keys['ArrowLeft']  || keys['KeyA']) player.angle -= rotSpeed;
   if (keys['ArrowRight'] || keys['KeyD']) player.angle += rotSpeed;
 
   let dx = 0, dy = 0;
-  if (keys['ArrowUp']   || keys['KeyW']) {
-    dx =  Math.cos(player.angle) * moveSpeed;
-    dy =  Math.sin(player.angle) * moveSpeed;
-  }
-  if (keys['ArrowDown'] || keys['KeyS']) {
-    dx = -Math.cos(player.angle) * moveSpeed;
-    dy = -Math.sin(player.angle) * moveSpeed;
-  }
+  if (keys['ArrowUp']   || keys['KeyW']) { dx =  Math.cos(player.angle) * moveSpeed; dy =  Math.sin(player.angle) * moveSpeed; }
+  if (keys['ArrowDown'] || keys['KeyS']) { dx = -Math.cos(player.angle) * moveSpeed; dy = -Math.sin(player.angle) * moveSpeed; }
 
-  const MARGIN = 0.25;
-
+  const M = 0.25;
   if (dx !== 0) {
     const nx = player.x + dx;
-    if (isWalkable(Math.floor(nx + Math.sign(dx) * MARGIN), Math.floor(player.y)))
-      player.x = nx;
+    if (isWalkable(Math.floor(nx + Math.sign(dx) * M), Math.floor(player.y))) player.x = nx;
   }
   if (dy !== 0) {
     const ny = player.y + dy;
-    if (isWalkable(Math.floor(player.x), Math.floor(ny + Math.sign(dy) * MARGIN)))
-      player.y = ny;
+    if (isWalkable(Math.floor(player.x), Math.floor(ny + Math.sign(dy) * M))) player.y = ny;
   }
 
-  // Pellet collection — check the cell the player is currently standing in
-  const cx = Math.floor(player.x);
-  const cy = Math.floor(player.y);
-
+  // Pellet collection
+  const cx = Math.floor(player.x), cy = Math.floor(player.y);
   if (pelletGrid[cy] && pelletGrid[cy][cx] > 0) {
     const ptype = pelletGrid[cy][cx];
     pelletGrid[cy][cx] = 0;
     pelletsLeft--;
-
     if (ptype === 1) {
       STATE.score += 10;
-    } else if (ptype === 2) {
+    } else {
       STATE.score += 50;
-      // Ghost frighten mode will be triggered in Phase 3
+      STATE.frightenTimer = 10; // 10 seconds of frightened mode
     }
+  }
+
+  // Space attack — rising edge (only on key-press, not hold)
+  const spaceNow = !!keys['Space'];
+  if (spaceNow && !prevSpaceDown) handleAttack();
+  prevSpaceDown = spaceNow;
+
+  // Timers
+  if (STATE.playerInvincTimer > 0) STATE.playerInvincTimer -= dt;
+  if (STATE.killMessageTimer  > 0) STATE.killMessageTimer  -= dt;
+  if (STATE.deathFlashTimer   > 0) STATE.deathFlashTimer   -= dt;
+
+  // Level complete: all pellets collected
+  if (pelletsLeft <= 0) {
+    STATE.phase = 'LEVEL_COMPLETE';
   }
 }
 
@@ -523,13 +724,23 @@ function updatePlayer() {
 // ================================================================
 let lastTime = 0;
 
-function loop(timestamp) {
-  const dt = Math.min((timestamp - lastTime) / 1000, 0.05); // cap at 50ms
-  lastTime = timestamp;
+function loop(ts) {
+  const dt = Math.min((ts - lastTime) / 1000, 0.05);
+  lastTime = ts;
 
   if (STATE.phase === 'PLAYING') {
-    updatePlayer();
+    updatePlayer(dt);
+    updateGhosts(dt);
     renderScene(dt);
+  } else {
+    // Placeholder screens — replaced in Phase 6
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    ctx.font = '14px "Press Start 2P", monospace';
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    if (STATE.phase === 'GAME_OVER')       ctx.fillText('GAME OVER',      W/2, H/2);
+    if (STATE.phase === 'LEVEL_COMPLETE')  ctx.fillText('LEVEL COMPLETE', W/2, H/2);
   }
 
   requestAnimationFrame(loop);
