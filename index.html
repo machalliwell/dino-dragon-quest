@@ -67,7 +67,13 @@ const STATE = {
   activePowerUp: null,
   activePowerUpTimer: 0,
   shieldActive: false,
-  ancientEyeTimer: 0,    // ANCIENT EYE reveal — tracked independently (like frightenTimer)
+  ancientEyeTimer: 0,       // ANCIENT EYE reveal — tracked independently (like frightenTimer)
+  lifeSaveStage: null,       // 'choice' | 'question' | 'result'
+  lifeSaveQuestion: null,    // current question object
+  lifeSaveInput: '',         // typed answer (fill-in / match questions)
+  lifeSaveResultTimer: 0,    // countdown before returning to PLAYING after result
+  lifeSaveSaved: false,      // whether life was saved this round
+  lifeSaveWillGameOver: false,// wrong answer caused lives to hit 0
 };
 
 // ================================================================
@@ -91,6 +97,102 @@ const LEVEL_CONFIGS = {
   2: { cols: 11, rows: 11, name: 'MESOZOIC MINES',      ghostCount: 5, baseSpeed: 1.3 },
   3: { cols: 14, rows: 14, name: "DRAGON'S LAIR",       ghostCount: 6, baseSpeed: 1.6 },
 };
+
+// ================================================================
+// QUESTION BANKS — age-matched questions for the life-save modal
+// young: MC math  |  mid: MC math/science/geography  |  old: MC vocab + fill-in + match
+// ================================================================
+const QUESTION_BANKS = {
+  young: [
+    {type:'mc',q:'What is 2 + 3?',choices:['3','4','5','6'],ans:'5'},
+    {type:'mc',q:'What is 8 - 5?',choices:['2','3','4','5'],ans:'3'},
+    {type:'mc',q:'What is 4 + 4?',choices:['6','7','8','9'],ans:'8'},
+    {type:'mc',q:'What is 10 - 4?',choices:['4','5','6','7'],ans:'6'},
+    {type:'mc',q:'What is 3 x 2?',choices:['4','5','6','7'],ans:'6'},
+    {type:'mc',q:'What is 5 + 6?',choices:['9','10','11','12'],ans:'11'},
+    {type:'mc',q:'What is 9 - 3?',choices:['5','6','7','8'],ans:'6'},
+    {type:'mc',q:'What is 2 x 4?',choices:['6','7','8','9'],ans:'8'},
+    {type:'mc',q:'What is 7 + 3?',choices:['8','9','10','11'],ans:'10'},
+    {type:'mc',q:'What is 6 - 2?',choices:['2','3','4','5'],ans:'4'},
+    {type:'mc',q:'What is 3 + 7?',choices:['8','9','10','11'],ans:'10'},
+    {type:'mc',q:'What is 5 x 2?',choices:['8','9','10','11'],ans:'10'},
+    {type:'mc',q:'What is 8 - 3?',choices:['3','4','5','6'],ans:'5'},
+    {type:'mc',q:'What is 4 + 7?',choices:['9','10','11','12'],ans:'11'},
+    {type:'mc',q:'What is 9 - 6?',choices:['2','3','4','5'],ans:'3'},
+    {type:'mc',q:'What is 2 x 5?',choices:['8','9','10','11'],ans:'10'},
+    {type:'mc',q:'What is 6 + 5?',choices:['9','10','11','12'],ans:'11'},
+    {type:'mc',q:'What is 7 - 4?',choices:['2','3','4','5'],ans:'3'},
+    {type:'mc',q:'What is 3 x 3?',choices:['6','7','8','9'],ans:'9'},
+    {type:'mc',q:'What is 4 + 5?',choices:['7','8','9','10'],ans:'9'},
+    {type:'mc',q:'What is 10 - 7?',choices:['2','3','4','5'],ans:'3'},
+    {type:'mc',q:'What is 2 + 8?',choices:['8','9','10','11'],ans:'10'},
+  ],
+  mid: [
+    {type:'mc',q:'What is 7 x 8?',choices:['48','54','56','63'],ans:'56'},
+    {type:'mc',q:'What is 144 / 12?',choices:['10','11','12','13'],ans:'12'},
+    {type:'mc',q:'What is 8 squared?',choices:['56','62','64','72'],ans:'64'},
+    {type:'mc',q:'What is the capital of France?',choices:['Berlin','London','Madrid','Paris'],ans:'Paris'},
+    {type:'mc',q:'What planet is closest to the Sun?',choices:['Mars','Venus','Mercury','Earth'],ans:'Mercury'},
+    {type:'mc',q:'What is the largest ocean on Earth?',choices:['Atlantic','Indian','Arctic','Pacific'],ans:'Pacific'},
+    {type:'mc',q:'How many sides does a hexagon have?',choices:['5','6','7','8'],ans:'6'},
+    {type:'mc',q:'Which gas do plants use to make food?',choices:['Oxygen','Nitrogen','Carbon dioxide','Hydrogen'],ans:'Carbon dioxide'},
+    {type:'mc',q:'What is the boiling point of water in Celsius?',choices:['90','95','100','212'],ans:'100'},
+    {type:'mc',q:'What continent is Egypt in?',choices:['Asia','Europe','Africa','South America'],ans:'Africa'},
+    {type:'mc',q:'How many centimeters are in a meter?',choices:['10','100','1000','10000'],ans:'100'},
+    {type:'mc',q:'What is the largest planet in our solar system?',choices:['Saturn','Uranus','Jupiter','Neptune'],ans:'Jupiter'},
+    {type:'mc',q:'What is 25% of 80?',choices:['15','20','25','40'],ans:'20'},
+    {type:'mc',q:'What is the square root of 49?',choices:['6','7','8','9'],ans:'7'},
+    {type:'mc',q:'How many bones are in the adult human body?',choices:['106','206','306','406'],ans:'206'},
+    {type:'mc',q:'What is the chemical formula for water?',choices:['HO2','2HO','OH','H2O'],ans:'H2O'},
+    {type:'mc',q:'On what continent is Brazil?',choices:['North America','Africa','South America','Asia'],ans:'South America'},
+    {type:'mc',q:'How many days are in a leap year?',choices:['364','365','366','367'],ans:'366'},
+    {type:'mc',q:'What is 15% of 200?',choices:['20','25','30','35'],ans:'30'},
+    {type:'mc',q:'What do we call an angle of exactly 90 degrees?',choices:['Acute angle','Right angle','Obtuse angle','Straight angle'],ans:'Right angle'},
+    {type:'mc',q:'Which planet is known for its rings?',choices:['Mars','Jupiter','Saturn','Venus'],ans:'Saturn'},
+    {type:'mc',q:'What is 13 x 5?',choices:['55','60','65','70'],ans:'65'},
+  ],
+  old: [
+    // Fill-in-blank — exact case-sensitive answers required
+    {type:'fill',q:'The process by which plants make food using sunlight is called _____.', ans:'photosynthesis'},
+    {type:'fill',q:'A scientist forms a _____ after observing data.',ans:'hypothesis'},
+    {type:'fill',q:'The powerhouse of the cell is the _____.',ans:'mitochondria'},
+    {type:'fill',q:'The three branches of the US government are legislative, judicial, and _____.',ans:'executive'},
+    {type:'fill',q:'A group of stars forming a recognizable pattern is called a _____.',ans:'constellation'},
+    {type:'fill',q:'A triangle with all sides equal is called _____.',ans:'equilateral'},
+    {type:'fill',q:'The study of living organisms is called _____.',ans:'biology'},
+    {type:'fill',q:'A word that names a person, place, or thing is called a _____.',ans:'noun'},
+    {type:'fill',q:"A comparison using 'like' or 'as' is called a _____.",ans:'simile'},
+    {type:'fill',q:'An extreme exaggeration used for effect is called _____.',ans:'hyperbole'},
+    {type:'fill',q:'The point of highest tension in a story is called the _____.',ans:'climax'},
+    {type:'fill',q:'The repetition of initial consonant sounds in words is called _____.',ans:'alliteration'},
+    // Vocabulary MC
+    {type:'mc',q:"Which word means 'extremely happy'?",choices:['euphoric','melancholy','ambiguous','serene'],ans:'euphoric'},
+    {type:'mc',q:"Which word means 'persistent and determined'?",choices:['verbose','tenacious','benevolent','dubious'],ans:'tenacious'},
+    {type:'mc',q:"Which word means 'brief and using few words'?",choices:['concise','verbose','eloquent','exhaustive'],ans:'concise'},
+    {type:'mc',q:"Which word means 'tending to cause death'?",choices:['benign','lethal','acute','finite'],ans:'lethal'},
+    {type:'mc',q:"Which word means 'showing no favoritism'?",choices:['partial','biased','impartial','subjective'],ans:'impartial'},
+    {type:'mc',q:"Which word means 'open to more than one interpretation'?",choices:['definitive','precise','absolute','ambiguous'],ans:'ambiguous'},
+    {type:'mc',q:"Which word means 'avoiding waste, especially of money'?",choices:['lavish','frugal','opulent','generous'],ans:'frugal'},
+    {type:'mc',q:"Which word means 'fluent or persuasive in speaking'?",choices:['verbose','taciturn','eloquent','inarticulate'],ans:'eloquent'},
+    {type:'mc',q:"Which word means 'kind and charitable'?",choices:['malevolent','indifferent','austere','benevolent'],ans:'benevolent'},
+    {type:'mc',q:"Which word means 'overly talkative'?",choices:['concise','verbose','taciturn','succinct'],ans:'verbose'},
+    {type:'mc',q:"Which word means 'calm and peaceful'?",choices:['turbulent','anxious','frantic','serene'],ans:'serene'},
+    {type:'mc',q:"Which word means 'deeply sad or gloomy'?",choices:['elated','indifferent','placid','melancholy'],ans:'melancholy'},
+    // Word-matching — user types e.g. "1B 2C 3A"; answer is normalized (no spaces, uppercase)
+    {type:'match',q:'Match each word to its definition:\n1. Benevolent  2. Tenacious  3. Verbose\nA. Wordy  B. Kind and generous  C. Refusing to give up\n(type e.g.  1B 2C 3A)',ans:'1B2C3A'},
+    {type:'match',q:'Match each word to its definition:\n1. Ambiguous  2. Frugal  3. Eloquent\nA. Careful with money  B. Well-spoken  C. Open to interpretation\n(type e.g.  1A 2B 3C)',ans:'1C2A3B'},
+    {type:'match',q:'Match each word to its definition:\n1. Euphoric  2. Melancholy  3. Serene\nA. Deeply sad  B. Extremely happy  C. Calm and peaceful\n(type e.g.  1A 2B 3C)',ans:'1B2A3C'},
+    {type:'match',q:'Match each word to its definition:\n1. Lethal  2. Impartial  3. Concise\nA. Brief and to the point  B. Causing death  C. Fair and unbiased\n(type e.g.  1A 2B 3C)',ans:'1B2C3A'},
+    {type:'match',q:'Match each word to its definition:\n1. Hypothesis  2. Inference  3. Alliteration\nA. Repetition of consonant sounds  B. Logical conclusion  C. Testable prediction\n(type e.g.  1A 2B 3C)',ans:'1C2B3A'},
+    {type:'match',q:'Match each word to its definition:\n1. Simile  2. Metaphor  3. Hyperbole\nA. Extreme exaggeration  B. Comparison using like or as  C. Direct comparison without like or as\n(type e.g.  1A 2B 3C)',ans:'1B2C3A'},
+  ],
+};
+let questionQueue=[], questionIdx=0;
+function initQuestionQueue(){ questionQueue=shuffle([...QUESTION_BANKS[STATE.ageGroup]]); questionIdx=0; }
+function getQuestion(){
+  if(questionIdx>=questionQueue.length){ shuffle(questionQueue); questionIdx=0; }
+  return questionQueue[questionIdx++];
+}
 
 // ================================================================
 // GHOST TYPE DEFINITIONS
@@ -315,6 +417,30 @@ const keys={};
 window.addEventListener('keydown',e=>{
   getAC(); // unlock AudioContext on first key press
   keys[e.code]=true;
+
+  // LIFE_SAVE modal captures its own input — prevent game keys from firing through
+  if(STATE.phase==='LIFE_SAVE'){
+    if(STATE.lifeSaveStage==='choice'){
+      if(e.key==='1'){e.preventDefault();chooseLoseLife();}
+      else if(e.key==='2'){e.preventDefault();chooseAnswerQuestion();}
+    } else if(STATE.lifeSaveStage==='question'){
+      const q=STATE.lifeSaveQuestion;
+      if(q.type==='mc'){
+        const idx=parseInt(e.key)-1;
+        if(idx>=0&&idx<=3){e.preventDefault();submitMCAnswer(idx);}
+      } else { // fill or match — typed input
+        if(e.code==='Enter'||e.code==='NumpadEnter'){
+          if(STATE.lifeSaveInput.length>0){e.preventDefault();submitFillAnswer();}
+        } else if(e.code==='Backspace'){
+          STATE.lifeSaveInput=STATE.lifeSaveInput.slice(0,-1); e.preventDefault();
+        } else if(e.key.length===1&&STATE.lifeSaveInput.length<40){
+          STATE.lifeSaveInput+=e.key; e.preventDefault();
+        }
+      }
+    }
+    return; // do not process any regular game keys while modal is open
+  }
+
   if(e.code==='Enter'||e.code==='NumpadEnter'){enterPressed=true;e.preventDefault();}
   const gk=['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','KeyW','KeyA','KeyS','KeyD','Space'];
   if(gk.includes(e.code)) e.preventDefault();
@@ -719,6 +845,7 @@ function updateAgeSelect(){
   ageLeftPrev=ln; ageRightPrev=rn;
   if(enterPressed){
     STATE.ageGroup=AGE_KEYS[STATE.selectedAge];
+    initQuestionQueue(); // pre-shuffle questions for this age group
     STATE.phase='TITLE';
     enterPressed=false;
   }
@@ -1086,9 +1213,13 @@ function playerHit(){
     STATE.shieldActive=false;STATE.activePowerUp=null;STATE.activePowerUpTimer=0;
     STATE.deathFlashTimer=0.2;playSound('shieldHit');return;
   }
-  STATE.lives--;STATE.playerInvincTimer=2.0;STATE.deathFlashTimer=0.4;
+  STATE.playerInvincTimer=2.0; STATE.deathFlashTimer=0.4;
   playSound('death');
-  if(STATE.lives<=0){updateHighScore();STATE.phase='GAME_OVER';}
+  // Enter life-save modal — lives are decremented only inside the modal (chooseLoseLife / submitAnswer)
+  STATE.phase='LIFE_SAVE';
+  STATE.lifeSaveStage='choice';
+  STATE.lifeSaveQuestion=null; STATE.lifeSaveInput='';
+  STATE.lifeSaveResultTimer=0; STATE.lifeSaveSaved=false; STATE.lifeSaveWillGameOver=false;
 }
 
 // ================================================================
@@ -1202,6 +1333,159 @@ function updatePlayer(dt){
 }
 
 // ================================================================
+// LIFE-SAVE MODAL — triggered every time a ghost hits the player
+// ================================================================
+function chooseLoseLife(){
+  STATE.lives--;
+  if(STATE.lives<=0){ updateHighScore(); STATE.lifeSaveWillGameOver=true; }
+  STATE.lifeSaveSaved=false; STATE.lifeSaveStage='result'; STATE.lifeSaveResultTimer=1.5;
+}
+
+function chooseAnswerQuestion(){
+  STATE.lifeSaveQuestion=getQuestion(); STATE.lifeSaveInput=''; STATE.lifeSaveStage='question';
+}
+
+function checkAnswer(q,input){
+  if(q.type==='mc')    return input===q.ans;
+  if(q.type==='fill')  return input===q.ans;           // case-sensitive exact match
+  if(q.type==='match') return input.replace(/\s/g,'').toUpperCase()===q.ans; // normalize format
+  return false;
+}
+
+function submitMCAnswer(idx){
+  const q=STATE.lifeSaveQuestion;
+  if(q.choices[idx]===q.ans){ STATE.lifeSaveSaved=true; playSound('powerup'); }
+  else { STATE.lifeSaveSaved=false; STATE.lives--; if(STATE.lives<=0){updateHighScore();STATE.lifeSaveWillGameOver=true;} }
+  STATE.lifeSaveStage='result'; STATE.lifeSaveResultTimer=1.5;
+}
+
+function submitFillAnswer(){
+  if(checkAnswer(STATE.lifeSaveQuestion,STATE.lifeSaveInput)){ STATE.lifeSaveSaved=true; playSound('powerup'); }
+  else { STATE.lifeSaveSaved=false; STATE.lives--; if(STATE.lives<=0){updateHighScore();STATE.lifeSaveWillGameOver=true;} }
+  STATE.lifeSaveStage='result'; STATE.lifeSaveResultTimer=1.5;
+}
+
+function updateLifeSave(dt){
+  if(STATE.lifeSaveStage==='result'){
+    STATE.lifeSaveResultTimer-=dt;
+    if(STATE.lifeSaveResultTimer<=0){
+      STATE.phase=STATE.lifeSaveWillGameOver?'GAME_OVER':'PLAYING';
+      STATE.lifeSaveStage=null;
+    }
+  }
+}
+
+/** Word-wrap text on the canvas, honouring \n line breaks.
+ *  Returns the y coordinate after the last line drawn. */
+function wrapText(text,x,y,maxW,lineH){
+  const paras=text.split('\n'); let cy=y;
+  for(const para of paras){
+    const words=para.split(' '); let line='';
+    for(const word of words){
+      const test=line+(line?' ':'')+word;
+      if(ctx.measureText(test).width>maxW&&line!==''){ctx.fillText(line,x,cy);line=word;cy+=lineH;}
+      else line=test;
+    }
+    if(line){ctx.fillText(line,x,cy);} cy+=lineH;
+  }
+  return cy;
+}
+
+function renderQuestion(){
+  const mx=100,my=90,mw=600;
+  const q=STATE.lifeSaveQuestion; if(!q) return;
+  ctx.textAlign='left';
+  ctx.font='6px "Press Start 2P",monospace'; ctx.fillStyle='#777';
+  ctx.fillText('ANSWER TO SAVE YOUR LIFE:',mx+20,my+22);
+  ctx.fillStyle='#333'; ctx.fillRect(mx+20,my+32,mw-40,1);
+  ctx.font='7px "Press Start 2P",monospace'; ctx.fillStyle='#ffffaa';
+  let qy=wrapText(q.q,mx+20,my+50,mw-40,16);
+  qy+=6;
+  if(q.type==='mc'){
+    const cols=['#ffaa44','#44aaff','#ff77bb','#66ff88'];
+    q.choices.forEach((ch,i)=>{
+      ctx.font='8px "Press Start 2P",monospace'; ctx.fillStyle=cols[i];
+      ctx.fillText(`[${i+1}] ${ch}`,mx+20+(i%2)*295,qy+Math.floor(i/2)*28);
+    });
+    ctx.textAlign='center'; ctx.fillStyle='#555'; ctx.font='6px "Press Start 2P",monospace';
+    ctx.fillText('Press 1, 2, 3, or 4 to select your answer',mx+mw/2,my+395);
+  } else {
+    ctx.fillStyle='#999'; ctx.font='6px "Press Start 2P",monospace';
+    ctx.fillText('YOUR ANSWER:',mx+20,qy+4);
+    const ibx=mx+20,iby=qy+16,ibw=mw-40,ibh=32;
+    ctx.fillStyle='#0a0a1a'; ctx.fillRect(ibx,iby,ibw,ibh);
+    ctx.strokeStyle='#6666ff'; ctx.lineWidth=1; ctx.strokeRect(ibx,iby,ibw,ibh);
+    const cursor=Math.floor(pulse*2)%2===0?'|':'';
+    ctx.font='7px "Press Start 2P",monospace'; ctx.fillStyle='#88ffff';
+    ctx.fillText(STATE.lifeSaveInput+cursor,ibx+8,iby+ibh/2+2);
+    ctx.textAlign='center'; ctx.fillStyle='#444'; ctx.font='5px "Press Start 2P",monospace';
+    ctx.fillText('BACKSPACE to delete  \u2502  ENTER to submit',mx+mw/2,iby+ibh+16);
+    if(q.type==='fill'){ctx.fillStyle='#333';ctx.fillText('Exact spelling required \u2014 case sensitive',mx+mw/2,iby+ibh+30);}
+  }
+}
+
+function renderLifeSaveModal(){
+  const mx=100,my=90,mw=600,mh=420;
+  ctx.fillStyle='rgba(0,0,0,0.76)'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#0f0018'; ctx.fillRect(mx,my,mw,mh);
+  ctx.strokeStyle='#ff3333'; ctx.lineWidth=3; ctx.strokeRect(mx,my,mw,mh);
+  ctx.textBaseline='middle'; ctx.textAlign='center';
+
+  if(STATE.lifeSaveStage==='choice'){
+    const glow=Math.floor(80+Math.sin(pulse*4)*60);
+    ctx.font='16px "Press Start 2P",monospace';
+    ctx.fillStyle=`rgb(255,${glow},0)`;
+    ctx.fillText('A GHOST GOT YOU!',mx+mw/2,my+55);
+    ctx.font='10px "Press Start 2P",monospace'; ctx.fillStyle='#fff';
+    ctx.fillText('SAVE YOUR LIFE?',mx+mw/2,my+94);
+
+    const bw=195,bh=90,b1x=mx+25,b2x=mx+380,by=my+120;
+    // Button 1: LOSE A LIFE
+    ctx.fillStyle='#1a0000'; ctx.fillRect(b1x,by,bw,bh);
+    ctx.strokeStyle='#cc1111'; ctx.lineWidth=2; ctx.strokeRect(b1x,by,bw,bh);
+    ctx.font='9px "Press Start 2P",monospace'; ctx.fillStyle='#ff4444';
+    ctx.fillText('LOSE A LIFE',b1x+bw/2,by+28);
+    ctx.font='6px "Press Start 2P",monospace'; ctx.fillStyle='#666';
+    ctx.fillText('press  1',b1x+bw/2,by+52); ctx.fillStyle='#333';
+    ctx.font='5px "Press Start 2P",monospace'; ctx.fillText('skip the question',b1x+bw/2,by+72);
+
+    // Button 2: ANSWER TO SAVE IT
+    ctx.fillStyle='#001a00'; ctx.fillRect(b2x,by,bw,bh);
+    ctx.strokeStyle='#11cc11'; ctx.lineWidth=2; ctx.strokeRect(b2x,by,bw,bh);
+    ctx.font='9px "Press Start 2P",monospace'; ctx.fillStyle='#44ff44';
+    ctx.fillText('ANSWER TO',b2x+bw/2,by+26); ctx.fillText('SAVE IT',b2x+bw/2,by+44);
+    ctx.font='6px "Press Start 2P",monospace'; ctx.fillStyle='#666';
+    ctx.fillText('press  2',b2x+bw/2,by+64); ctx.fillStyle='#333';
+    ctx.font='5px "Press Start 2P",monospace'; ctx.fillText('answer correctly',b2x+bw/2,by+80);
+
+    // Gap label
+    ctx.fillStyle='#333'; ctx.font='6px "Press Start 2P",monospace';
+    ctx.fillText('or',mx+mw/2,by+bh/2);
+
+    ctx.fillStyle='#444'; ctx.font='6px "Press Start 2P",monospace';
+    ctx.fillText('Press 1 or 2 to choose',mx+mw/2,my+248);
+
+  } else if(STATE.lifeSaveStage==='question'){
+    renderQuestion();
+
+  } else if(STATE.lifeSaveStage==='result'){
+    const saved=STATE.lifeSaveSaved;
+    ctx.font='20px "Press Start 2P",monospace';
+    ctx.fillStyle=saved?'#44ff44':'#ff4444';
+    ctx.fillText(saved?'LIFE SAVED!':'LIFE LOST!',mx+mw/2,my+mh/2-18);
+    ctx.font='7px "Press Start 2P",monospace';
+    if(saved){
+      ctx.fillStyle='#aaffaa'; ctx.fillText('CORRECT ANSWER!',mx+mw/2,my+mh/2+16);
+    } else {
+      ctx.fillStyle='#ff9999';
+      const ans=STATE.lifeSaveQuestion?`Correct: ${STATE.lifeSaveQuestion.ans}`:'';
+      if(ans.length<30) ctx.fillText(ans,mx+mw/2,my+mh/2+16);
+      else ctx.fillText(ans.slice(0,28)+'...',mx+mw/2,my+mh/2+16);
+    }
+  }
+}
+
+// ================================================================
 // GAME LOOP
 // ================================================================
 let lastTime=0;
@@ -1212,12 +1496,13 @@ function loop(ts){
   pulse+=dt; // global animation timer — drives all pulsing effects
 
   switch(STATE.phase){
-    case 'AGE_SELECT':    updateAgeSelect();      renderAgeSelect();    break;
-    case 'TITLE':         updateTitle(dt);        renderTitle();        break;
-    case 'PLAYING':       updatePlayer(dt);       updateGhosts(dt);     renderScene(); break;
-    case 'LEVEL_COMPLETE':updateLevelComplete();  renderLevelComplete(); break;
-    case 'WIN':           renderWin();             break;
-    case 'GAME_OVER':     updateGameOver();        renderGameOver();     break;
+    case 'AGE_SELECT':    updateAgeSelect();      renderAgeSelect();              break;
+    case 'TITLE':         updateTitle(dt);        renderTitle();                  break;
+    case 'PLAYING':       updatePlayer(dt);       updateGhosts(dt); renderScene(); break;
+    case 'LIFE_SAVE':     updateLifeSave(dt);     renderScene(); renderLifeSaveModal(); break;
+    case 'LEVEL_COMPLETE':updateLevelComplete();  renderLevelComplete();          break;
+    case 'WIN':           renderWin();                                            break;
+    case 'GAME_OVER':     updateGameOver();        renderGameOver();              break;
   }
 
   // Clear enter flag after each frame (only acts on the frame it first appears)
