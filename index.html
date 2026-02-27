@@ -67,6 +67,7 @@ const STATE = {
   activePowerUp: null,
   activePowerUpTimer: 0,
   shieldActive: false,
+  ancientEyeTimer: 0,    // ANCIENT EYE reveal — tracked independently (like frightenTimer)
 };
 
 // ================================================================
@@ -110,8 +111,9 @@ const POWER_UP_DEFS = {
   FOSSIL_SHIELD:{ color: '#1133aa', hi: '#4488ff', label: 'FS', duration: 999 },
   SPEED_BOOST:  { color: '#886600', hi: '#ffee00', label: 'SB', duration: 8   },
   ANCIENT_RAGE: { color: '#550077', hi: '#cc44ff', label: 'AR', duration: 10  },
+  ANCIENT_EYE:  { color: '#887700', hi: '#ffff44', label: 'AE', duration: 15  },
 };
-const PU_TYPES = ['FIRE_BREATH','TAIL_WHIP','FOSSIL_SHIELD','SPEED_BOOST','ANCIENT_RAGE'];
+const PU_TYPES = ['FIRE_BREATH','TAIL_WHIP','FOSSIL_SHIELD','SPEED_BOOST','ANCIENT_RAGE','ANCIENT_EYE'];
 
 // ================================================================
 // MAP DATA
@@ -254,6 +256,7 @@ function initLevel(levelNum) {
   STATE.frightenTimer=0; STATE.playerInvincTimer=2.0;
   STATE.killMessage=''; STATE.killMessageTimer=0;
   STATE.activePowerUp=null; STATE.activePowerUpTimer=0; STATE.shieldActive=false;
+  STATE.ancientEyeTimer=0;
 }
 
 function spawnGhosts(levelNum,diff){
@@ -287,12 +290,12 @@ function spawnPowerUps(){
   for(let y=1;y<MAP_H-1;y++) for(let x=1;x<MAP_W-1;x++)
     if(map[y][x]===0&&dist(x+0.5,y+0.5,1.5,1.5)>4) oc.push([x,y]);
   shuffle(oc);
-  const step=Math.max(1,Math.floor(oc.length/5));
+  const step=Math.max(1,Math.floor(oc.length/PU_TYPES.length)); // distributes all 6 types
   PU_TYPES.forEach((type,i)=>{
     const idx=i*step;
     if(idx<oc.length){
       const [cx,cy]=oc[idx];
-      powerUps.push({x:cx+0.5,y:cy+0.5,type,collected:false,bobPhase:i*(TWO_PI/5)});
+      powerUps.push({x:cx+0.5,y:cy+0.5,type,collected:false,bobPhase:i*(TWO_PI/PU_TYPES.length)});
     }
   });
 }
@@ -534,6 +537,18 @@ function drawMinimap(){
       ctx.fillStyle=`rgb(0,${g},40)`; ctx.fillRect(px,py,cw,ch);
     }
   }
+  // ANCIENT EYE reveal — pellet locations glow gold on minimap
+  if(STATE.ancientEyeTimer>0){
+    const gb=Math.floor(180+Math.sin(pulse*4)*55); // pulsing brightness
+    for(let y=0;y<MAP_H;y++) for(let x=0;x<MAP_W;x++){
+      if(!pelletGrid[y]||!pelletGrid[y][x]) continue;
+      const isPwr=pelletGrid[y][x]===2;
+      const ds=isPwr?Math.max(3,cw):Math.max(2,Math.floor(cw*0.7));
+      ctx.fillStyle=isPwr?`rgb(255,${gb},0)`:`rgb(${gb},${gb},0)`;
+      ctx.fillRect(ox+x*cw+Math.floor((cw-ds)/2),oy+y*ch+Math.floor((ch-ds)/2),ds,ds);
+    }
+  }
+
   for(const pu of powerUps){
     if(pu.collected) continue;
     ctx.fillStyle=POWER_UP_DEFS[pu.type].hi;
@@ -655,6 +670,30 @@ function renderScene(){
     ctx.fillRect(x,HALF_H-(wh>>1),1,wh);
   }
   renderSprites();
+
+  // ANCIENT EYE — render pellet positions as glowing sprites in 3D when active
+  if(STATE.ancientEyeTimer>0){
+    const dirX=Math.cos(player.angle),dirY=Math.sin(player.angle);
+    const plX=-dirY*TAN_HALF,plY=dirX*TAN_HALF;
+    const inv=1/(plX*dirY-dirX*plY);
+    const gBright=Math.floor(180+Math.sin(pulse*4)*55);
+    for(let py=1;py<MAP_H-1;py++) for(let px=1;px<MAP_W-1;px++){
+      if(!pelletGrid[py]||!pelletGrid[py][px]) continue;
+      const sx=px+0.5-player.x,sy=py+0.5-player.y;
+      if(sx*sx+sy*sy>100) continue;              // skip beyond 10 units
+      const tX=inv*(dirY*sx-dirX*sy);
+      const tZ=inv*(-plY*sx+plX*sy);
+      if(tZ<=0.1) continue;
+      const scrX=Math.floor(W/2*(1+tX/tZ));
+      if(scrX<0||scrX>=W) continue;
+      if(zBuffer[scrX]<tZ) continue;            // behind wall
+      const sh=Math.max(4,Math.floor(H/tZ));
+      const dotR=Math.max(2,Math.floor(sh*0.08));
+      const dotY=HALF_H;
+      ctx.fillStyle=pelletGrid[py][px]===2?`rgb(255,${gBright},0)`:`rgba(${gBright},${gBright},0,0.9)`;
+      ctx.beginPath(); ctx.arc(scrX,dotY,dotR,0,TWO_PI); ctx.fill();
+    }
+  }
 
   if(STATE.deathFlashTimer>0){
     ctx.fillStyle=`rgba(220,0,0,${(STATE.deathFlashTimer/0.4).toFixed(2)})`;
@@ -1072,6 +1111,10 @@ function collectPowerUp(pu){
     case 'ANCIENT_RAGE':
       STATE.frightenTimer=DIFF_PARAMS[STATE.ageGroup].frightenDuration;playSound('frighten');
       STATE.activePowerUp='ANCIENT_RAGE';STATE.activePowerUpTimer=STATE.frightenTimer;break;
+    case 'ANCIENT_EYE':
+      // Reveal all pellet locations for 15s — timer tracked separately so other PUs still work
+      STATE.ancientEyeTimer=15*DIFF_PARAMS[STATE.ageGroup].powerUpMult;
+      STATE.activePowerUp='ANCIENT_EYE';STATE.activePowerUpTimer=STATE.ancientEyeTimer;break;
   }
 }
 
@@ -1153,6 +1196,7 @@ function updatePlayer(dt){
     if(STATE.activePowerUpTimer<=0){STATE.activePowerUp=null;STATE.activePowerUpTimer=0;}
   }
   if(STATE.activePowerUp==='ANCIENT_RAGE')STATE.activePowerUpTimer=STATE.frightenTimer;
+  if(STATE.ancientEyeTimer>0)STATE.ancientEyeTimer=Math.max(0,STATE.ancientEyeTimer-dt);
 
   if(pelletsLeft<=0){updateHighScore();playSound('levelDone');STATE.phase='LEVEL_COMPLETE';}
 }
