@@ -25,6 +25,20 @@ const TAN_HALF = Math.tan(HALF_FOV);
 const MAX_DEPTH = 24;
 const TWO_PI = Math.PI * 2;
 const CHAR_KEYS = ['DINO_WARRIOR', 'DRAGON_KNIGHT', 'PALEO_PACMAN'];
+const AGE_KEYS  = ['young','mid','old'];
+
+// Difficulty parameters per age group — drives maze size, ghost speed, safe room count, power-up durations
+const DIFF_PARAMS = {
+  young: { ghostSpeedMult:0.60, safeRooms:3, ghostCounts:[2,3,4],
+           mazeSizes:[{cols:6,rows:6},{cols:8,rows:8},{cols:10,rows:10}],
+           powerUpMult:1.5, frightenDuration:12 },
+  mid:   { ghostSpeedMult:1.00, safeRooms:2, ghostCounts:[3,5,6],
+           mazeSizes:[{cols:8,rows:8},{cols:11,rows:11},{cols:14,rows:14}],
+           powerUpMult:1.0, frightenDuration:10 },
+  old:   { ghostSpeedMult:1.40, safeRooms:1, ghostCounts:[4,6,7],
+           mazeSizes:[{cols:10,rows:10},{cols:13,rows:13},{cols:16,rows:16}],
+           powerUpMult:0.7, frightenDuration:7  },
+};
 
 // ================================================================
 // PERSISTENCE — high score stored in localStorage
@@ -41,8 +55,10 @@ function updateHighScore() {
 // GAME STATE
 // ================================================================
 const STATE = {
-  phase: 'TITLE',
-  selectedChar: 0,          // index into CHAR_KEYS for title selection
+  phase: 'AGE_SELECT',       // start on age select screen
+  ageGroup: 'mid',           // 'young' | 'mid' | 'old' — set on age select, persists all session
+  selectedAge: 1,            // cursor index (0=young, 1=mid, 2=old)
+  selectedChar: 0,           // index into CHAR_KEYS for title selection
   level: 1, score: 0, lives: 3,
   frightenTimer: 0,
   playerInvincTimer: 0,
@@ -204,18 +220,20 @@ function generateMaze(cols, rows) {
 // LEVEL INITIALISER
 // ================================================================
 function initLevel(levelNum) {
-  const cfg=LEVEL_CONFIGS[levelNum];
-  map=generateMaze(cfg.cols,cfg.rows); MAP_W=map[0].length; MAP_H=map.length;
+  const diff=DIFF_PARAMS[STATE.ageGroup];
+  const ms=diff.mazeSizes[levelNum-1];         // maze dimensions scaled to age group
+  map=generateMaze(ms.cols,ms.rows); MAP_W=map[0].length; MAP_H=map.length;
 
   safeRoomSet=new Set();
   const rc=[];
-  for(let r=0;r<cfg.rows;r++) for(let c=0;c<cfg.cols;c++){
+  for(let r=0;r<ms.rows;r++) for(let c=0;c<ms.cols;c++){
     if(r===0&&c===0) continue;
     const px=c*2+1,py=r*2+1;
     if(map[py][px]===0) rc.push([px,py]);
   }
   shuffle(rc);
-  for(let i=0;i<2&&i<rc.length;i++){const [sx,sy]=rc[i];map[sy][sx]=2;safeRoomSet.add(`${sx},${sy}`);}
+  // safe room count from diff params (young=3, mid=2, old=1)
+  for(let i=0;i<diff.safeRooms&&i<rc.length;i++){const [sx,sy]=rc[i];map[sy][sx]=2;safeRoomSet.add(`${sx},${sy}`);}
 
   pelletGrid=Array.from({length:MAP_H},()=>new Array(MAP_W).fill(0)); pelletsLeft=0;
   const pc=[];
@@ -228,7 +246,7 @@ function initLevel(levelNum) {
     if(map[y][x]===0&&pelletGrid[y][x]===0){if(x<=2&&y<=2)continue;pelletGrid[y][x]=1;pelletsLeft++;}
   }
 
-  spawnGhosts(levelNum,cfg);
+  spawnGhosts(levelNum,diff);
   spawnPowerUps();
 
   player.x=1.5; player.y=1.5; player.angle=0;
@@ -237,9 +255,11 @@ function initLevel(levelNum) {
   STATE.activePowerUp=null; STATE.activePowerUpTimer=0; STATE.shieldActive=false;
 }
 
-function spawnGhosts(levelNum,cfg){
+function spawnGhosts(levelNum,diff){
   ghosts=[];
-  const base=cfg.baseSpeed;
+  const cfg=LEVEL_CONFIGS[levelNum];
+  const base=cfg.baseSpeed*diff.ghostSpeedMult;  // age-group speed multiplier applied here
+  const gc=diff.ghostCounts[levelNum-1];          // ghost count from diff params
   const sp=[];
   for(let y=1;y<MAP_H-1;y++) for(let x=1;x<MAP_W-1;x++)
     if(map[y][x]===0&&dist(x+0.5,y+0.5,1.5,1.5)>5) sp.push([x,y]);
@@ -248,7 +268,7 @@ function spawnGhosts(levelNum,cfg){
     const [cx,cy]=sp[idx++];
     ghosts.push(makeGhost('BOSS',cx,cy,base*1.5,'chase',2,'#aa00ff',1.3,true));
   }
-  for(let i=0;i<cfg.ghostCount&&idx<sp.length;i++,idx++){
+  for(let i=0;i<gc&&idx<sp.length;i++,idx++){
     const tk=GHOST_TYPE_KEYS[i%3],td=GHOST_TYPES[tk],[cx,cy]=sp[idx];
     ghosts.push(makeGhost(tk,cx,cy,base*td.speedMult,td.ai,1,td.color,1.0,false));
   }
@@ -282,6 +302,7 @@ function spawnPowerUps(){
 const player={x:1.5,y:1.5,angle:0};
 let prevSpaceDown=false, footstepTimer=0, enterPressed=false;
 let titleLeftPrev=false, titleRightPrev=false;
+let ageLeftPrev=false,   ageRightPrev=false;
 
 // ================================================================
 // INPUT
@@ -638,6 +659,87 @@ function renderScene(){
 }
 
 // ================================================================
+// AGE SELECTION SCREEN — shown once per session before character select
+// ================================================================
+function updateAgeSelect(){
+  const ln=!!keys['ArrowLeft'],rn=!!keys['ArrowRight'];
+  if(ln&&!ageLeftPrev){STATE.selectedAge=(STATE.selectedAge+2)%3;playSound('titleBeep');}
+  if(rn&&!ageRightPrev){STATE.selectedAge=(STATE.selectedAge+1)%3;playSound('titleBeep');}
+  ageLeftPrev=ln; ageRightPrev=rn;
+  if(enterPressed){
+    STATE.ageGroup=AGE_KEYS[STATE.selectedAge];
+    STATE.phase='TITLE';
+    enterPressed=false;
+  }
+}
+
+function renderAgeSelect(){
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+  ctx.textBaseline='middle';
+
+  // Star field (matches title screen)
+  ctx.fillStyle='#fff';
+  for(let i=0;i<60;i++){
+    const sx=((i*137+11)%W),sy=((i*97+7)%250)+30;
+    if(Math.sin(pulse*1.5+i)*0.5+0.5>0.4) ctx.fillRect(sx,sy,1,1);
+  }
+
+  // Pulsing title
+  const tP=Math.sin(pulse*1.2);
+  ctx.font='22px "Press Start 2P",monospace'; ctx.textAlign='center';
+  ctx.fillStyle=`rgb(${Math.floor(255-tP*30)},${Math.floor(200-tP*50)},0)`;
+  ctx.fillText('DINO-DRAGON QUEST',W/2,65);
+
+  ctx.font='11px "Press Start 2P",monospace'; ctx.fillStyle='#fff';
+  ctx.fillText('HOW OLD ARE YOU?',W/2,112);
+
+  // Three age-group buttons
+  const ages=[
+    {label:'AGES 5-7',  role:'EXPLORER',   diff:'EASY MODE',   col:'#44aaff',
+     tips:['SLOWER GHOSTS','MORE SAFE ROOMS']},
+    {label:'AGES 8-10', role:'ADVENTURER',  diff:'STANDARD',    col:'#44ff88',
+     tips:['BALANCED SPEED','STANDARD MAZES']},
+    {label:'AGES 11+',  role:'CHAMPION',    diff:'CHALLENGE',   col:'#ff6644',
+     tips:['FASTER GHOSTS','LARGER MAZES']},
+  ];
+  const bw=178,bh=128,gap=20;
+  const startX=(W-(3*bw+2*gap))/2;
+
+  for(let i=0;i<3;i++){
+    const bx=startX+i*(bw+gap),by=148,ag=ages[i],sel=i===STATE.selectedAge;
+    ctx.fillStyle=sel?'rgba(255,220,0,0.10)':'rgba(30,30,30,0.60)';
+    ctx.fillRect(bx,by,bw,bh);
+    ctx.strokeStyle=sel?`rgba(255,220,0,${(0.7+Math.sin(pulse*4)*0.3).toFixed(2)})`:'#333';
+    ctx.lineWidth=sel?2:1; ctx.strokeRect(bx,by,bw,bh);
+
+    ctx.font='10px "Press Start 2P",monospace'; ctx.textAlign='center';
+    ctx.fillStyle=sel?ag.col:'#555';
+    ctx.fillText(ag.label,bx+bw/2,by+24);
+
+    ctx.font='8px "Press Start 2P",monospace';
+    ctx.fillStyle=sel?'#fff':'#444';
+    ctx.fillText(ag.role,bx+bw/2,by+50);
+
+    ctx.font='7px "Press Start 2P",monospace';
+    ctx.fillStyle=sel?ag.col:'#333';
+    ctx.fillText(ag.diff,bx+bw/2,by+74);
+
+    ctx.font='5px "Press Start 2P",monospace';
+    ctx.fillStyle=sel?'#999':'#2a2a2a';
+    ag.tips.forEach((t,j)=>ctx.fillText(t,bx+bw/2,by+98+j*13));
+  }
+
+  ctx.font='8px "Press Start 2P",monospace'; ctx.fillStyle='#666'; ctx.textAlign='center';
+  ctx.fillText('< LEFT / RIGHT >',W/2,310);
+  if(Math.floor(pulse*2)%2===0){
+    ctx.font='9px "Press Start 2P",monospace'; ctx.fillStyle='#ffff00';
+    ctx.fillText('PRESS ENTER TO CONFIRM',W/2,345);
+  }
+  ctx.fillStyle='rgba(0,0,0,0.07)';
+  for(let y=0;y<H;y+=3) ctx.fillRect(0,y,W,1);
+}
+
+// ================================================================
 // TITLE SCREEN
 // ================================================================
 function updateTitle(dt){
@@ -944,19 +1046,20 @@ function playerHit(){
 function collectPowerUp(pu){
   pu.collected=true;
   playSound('powerup');
+  const mult=DIFF_PARAMS[STATE.ageGroup].powerUpMult; // age-group multiplier on timed power-ups
   switch(pu.type){
     case 'FIRE_BREATH':
-      STATE.activePowerUp='FIRE_BREATH';STATE.activePowerUpTimer=5;break;
+      STATE.activePowerUp='FIRE_BREATH';STATE.activePowerUpTimer=5*mult;break;
     case 'TAIL_WHIP':
       for(const g of ghosts)if(!g.dead&&dist(g.x,g.y,player.x,player.y)<2)g.stunTimer=2;
       STATE.activePowerUp='TAIL_WHIP';STATE.activePowerUpTimer=2;break;
     case 'FOSSIL_SHIELD':
       STATE.shieldActive=true;STATE.activePowerUp='FOSSIL_SHIELD';STATE.activePowerUpTimer=999;break;
     case 'SPEED_BOOST':
-      STATE.activePowerUp='SPEED_BOOST';STATE.activePowerUpTimer=8;break;
+      STATE.activePowerUp='SPEED_BOOST';STATE.activePowerUpTimer=8*mult;break;
     case 'ANCIENT_RAGE':
-      STATE.frightenTimer=10;playSound('frighten');
-      STATE.activePowerUp='ANCIENT_RAGE';STATE.activePowerUpTimer=10;break;
+      STATE.frightenTimer=DIFF_PARAMS[STATE.ageGroup].frightenDuration;playSound('frighten');
+      STATE.activePowerUp='ANCIENT_RAGE';STATE.activePowerUpTimer=STATE.frightenTimer;break;
   }
 }
 
@@ -1018,7 +1121,7 @@ function updatePlayer(dt){
   if(pelletGrid[cy]&&pelletGrid[cy][cx]>0){
     const pt=pelletGrid[cy][cx];pelletGrid[cy][cx]=0;pelletsLeft--;
     if(pt===1){STATE.score+=10;playSound('pellet');}
-    else{STATE.score+=50;STATE.frightenTimer=10;playSound('pelletPwr');playSound('frighten');}
+    else{STATE.score+=50;STATE.frightenTimer=DIFF_PARAMS[STATE.ageGroup].frightenDuration;playSound('pelletPwr');playSound('frighten');}
   }
 
   // Power-up collection
@@ -1053,15 +1156,17 @@ function loop(ts){
   pulse+=dt; // global animation timer — drives all pulsing effects
 
   switch(STATE.phase){
-    case 'TITLE':         updateTitle(dt);       renderTitle();        break;
-    case 'PLAYING':       updatePlayer(dt);       updateGhosts(dt);    renderScene(); break;
+    case 'AGE_SELECT':    updateAgeSelect();      renderAgeSelect();    break;
+    case 'TITLE':         updateTitle(dt);        renderTitle();        break;
+    case 'PLAYING':       updatePlayer(dt);       updateGhosts(dt);     renderScene(); break;
     case 'LEVEL_COMPLETE':updateLevelComplete();  renderLevelComplete(); break;
     case 'WIN':           renderWin();             break;
     case 'GAME_OVER':     updateGameOver();        renderGameOver();     break;
   }
 
   // Clear enter flag after each frame (only acts on the frame it first appears)
-  if(STATE.phase!=='TITLE'&&STATE.phase!=='LEVEL_COMPLETE'&&STATE.phase!=='WIN'&&STATE.phase!=='GAME_OVER')
+  // AGE_SELECT, TITLE, LEVEL_COMPLETE, WIN, GAME_OVER manage enterPressed themselves
+  if(STATE.phase!=='AGE_SELECT'&&STATE.phase!=='TITLE'&&STATE.phase!=='LEVEL_COMPLETE'&&STATE.phase!=='WIN'&&STATE.phase!=='GAME_OVER')
     enterPressed=false;
 
   requestAnimationFrame(loop);
