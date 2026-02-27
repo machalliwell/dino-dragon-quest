@@ -13,7 +13,7 @@ Font: "Press Start 2P" (Google Fonts).
 - [x] Phase 3: Enemy AI + collision
 - [x] Phase 4: Power-ups + combat
 - [x] Phase 5: HUD + minimap
-- [ ] Phase 6: Screens + audio (combined to stay within token limits)
+- [x] Phase 6: Screens + audio (combined to stay within token limits)
 
 ---
 
@@ -163,6 +163,29 @@ Font: "Press Start 2P" (Google Fonts).
 - SANCTUARY overlay: pulsing green text at H/2+28 when player cell is in safeRoomSet
 - ctx.save/restore around renderHUD to prevent textAlign/textBaseline leakage
 - Lives displayed as 10×12 colored rectangles (avoids font glyph issues with ♥)
+
+### Phase 6
+- Audio: Web Audio API, lazy AudioContext (unlocked on first keydown per browser policy)
+- 8 sounds: footstep (70Hz square 0.04s), pellet (880→1200Hz 0.07s), pelletPwr (layered),
+  powerup (ascending arpeggio 440/660/880Hz), frighten (800→200 sawtooth 0.5s),
+  ghostDefeat (220→600 sawtooth + 900 sine), death (440→55 sawtooth 0.9s),
+  levelDone (4-note fanfare), win (5-note ascending)
+- Footstep: plays every 0.18s while any forward/back key is held
+- Title screen: star field + blinking title + 3 character select boxes with 48px avatars
+- drawAvatar now parameterized: drawAvatar(charObj, x, y, sz=32) — scales with r=sz/32
+- Character stats shown per box; selected box glows gold with pulse
+- LEFT/RIGHT arrows cycle character on title (rising edge), Enter starts game
+- AudioContext unlocked on first keydown
+- LEVEL_COMPLETE screen: level name cleared, score, next level prompt (or all-done)
+- WIN screen: animated color burst, star field, new high score detection
+- GAME_OVER screen: blinking red title, score vs high score, enter to retry
+- localStorage key: 'dino-dragon-hs'
+- updateHighScore() called at: game over, level complete → win, pelletsLeft hits 0
+- CRT scanline overlay (rgba 0,0,0,0.07-0.08, every 3px) on all game screens
+- pulse moved from renderSprites to main loop (prevents double-increment)
+- enterPressed rising-edge cleared after each frame's screen handler uses it
+- WIN phase added: all 3 levels cleared, returns to TITLE on Enter
+- SANCTUARY overlay: pulsing green text moved into renderHUD (works from renderScene call)
 
 ---
 
