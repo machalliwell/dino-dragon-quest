@@ -189,5 +189,63 @@ Font: "Press Start 2P" (Google Fonts).
 
 ---
 
+## Feature Log 1 — Changelog
+
+### Feature A: Age Selection Screen + Difficulty Scaling
+- AGE_SELECT phase added before TITLE; shown once per session, age persists
+- DIFF_PARAMS drives ghost speed, safe rooms (1/2/3), ghost count, maze size, PU durations, frighten duration
+- AGE_KEYS: ['young','mid','old'] — maps to selectedAge cursor index
+- initQuestionQueue() called on age confirm to pre-shuffle the correct question bank
+
+### Feature B: Pellet Progress Bar
+- totalPellets snapshotted in initLevel(); bar drains as pelletsLeft decreases
+- Color: green >50%, yellow 25-50%, red <25%
+- Positioned at y=32 (below top bar + frighten sub-bar), 14px height
+
+### Feature C: ANCIENT EYE Power-Up
+- 6th power-up type; PU_TYPES now has 6 entries; bob phase uses TWO_PI/6
+- ancientEyeTimer tracked independently (like frightenTimer) — persists if other PU collected on top
+- Minimap: pulsing gold dots at pellet cells; power pellet dots brighter/larger
+- 3D view: ZBuffer-tested arc sprites for pellets within 10 units of player
+- powerUpMult applies to ANCIENT_EYE duration like other timed PUs
+
+### Feature D: Educational Life-Save Modal
+- playerHit() now enters LIFE_SAVE phase instead of decrementing lives directly
+- Modal appears on EVERY hit; player may lose life or attempt a question
+- Question banks: 22 young MC, 22 mid MC, 30 old (12 fill-in + 12 vocab MC + 6 match)
+- Fill-in answers: exact case-sensitive match (trains accurate spelling for 11+)
+- Match answers: normalized (strip spaces, uppercase) before compare
+- keydown handler returns early during LIFE_SAVE to block game input through modal
+- chooseLoseLife() / submitMCAnswer() / submitFillAnswer() handle life decrement
+
+### Feature E: Three Camera Perspectives — Edge Cases (logged pre-implementation)
+1. TAB disabled during: AGE_SELECT, TITLE, LEVEL_COMPLETE, WIN, GAME_OVER, LIFE_SAVE
+2. player.angle persists across switches; used for minimap arrow in all modes
+3. Controls identical in all modes: W/S = forward/back (along angle), A/D = turn; no strafe
+4. Ghost cell-to-cell movement uses world coords; works identically in all perspectives
+5. All timers (frightenTimer, ancientEyeTimer, activePowerUpTimer, playerInvincTimer) persist globally
+6. Death flash red overlay rendered in all three view renderers
+7. LIFE_SAVE renders the current perspective as frozen background + modal overlay on top
+8. Fire breath animation is view-specific: first-person=orange screen flash, top-down=beam line, side-scroll=horizontal projectile
+9. Safe rooms: green-tinted in all views
+10. Minimap always rendered via renderHUD() call (last, on top), in all views
+11. ANCIENT EYE pellets: always visible in top-down/side-scroll; only glow in first-person when active
+12. WASD turning (A/D) still updates angle in all views; top-down arrow reflects facing direction
+13. Camera snap (no lerp) in side-scroll; clamped to maze bounds to prevent over-scroll
+14. For very large mazes (old, level 3: 33×33 cells), top-down cell size adapts (min ~24px)
+
+### Feature E: Three Camera Perspectives — QA Notes
+- TAB cycles: first → top → side → first (rising-edge in keydown, only during PLAYING)
+- renderCurrentView() helper in loop() dispatches to correct renderer; used by both PLAYING and LIFE_SAVE
+- fireProjTimer: set 0.30s in handleAttack on FIRE_BREATH; first-person=screen flash, top-down=beam line, side-scroll=horizontal projectile rect
+- Top-down: cs = min(floor(W/MAP_W), floor(H/MAP_H)); maze centered via ox/oy offset; pellets always visible
+- Side-scroll: cs=48px, camera snaps to player (no lerp), clamped to [0, MAP*cs-viewport] per axis
+- Side-scroll player: white/character-colored rect sprite at screen center; 2-frame walk via floor(pulse*5)%2
+- Side-scroll flip: player sprite mirrored via ctx.scale(-1,1) when cos(angle)<0
+- Minimap [TAB]1P/TD/SS indicator added to top-left of top bar (5px font)
+- perspective persists across level transitions (fireProjTimer reset per level, perspective not reset)
+
+---
+
 ## Known Issues / Technical Debt
 *(Tracked here as discovered)*

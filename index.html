@@ -74,6 +74,8 @@ const STATE = {
   lifeSaveResultTimer: 0,    // countdown before returning to PLAYING after result
   lifeSaveSaved: false,      // whether life was saved this round
   lifeSaveWillGameOver: false,// wrong answer caused lives to hit 0
+  perspective: 'first',      // 'first' | 'top' | 'side' — TAB cycles, all state persists
+  fireProjTimer: 0,          // FIRE_BREATH animation duration (0.3s)
 };
 
 // ================================================================
@@ -358,7 +360,8 @@ function initLevel(levelNum) {
   STATE.frightenTimer=0; STATE.playerInvincTimer=2.0;
   STATE.killMessage=''; STATE.killMessageTimer=0;
   STATE.activePowerUp=null; STATE.activePowerUpTimer=0; STATE.shieldActive=false;
-  STATE.ancientEyeTimer=0;
+  STATE.ancientEyeTimer=0; STATE.fireProjTimer=0;
+  // perspective persists across levels (intentional)
 }
 
 function spawnGhosts(levelNum,diff){
@@ -442,6 +445,11 @@ window.addEventListener('keydown',e=>{
   }
 
   if(e.code==='Enter'||e.code==='NumpadEnter'){enterPressed=true;e.preventDefault();}
+  // TAB cycles perspective (only during active gameplay)
+  if(e.code==='Tab'&&STATE.phase==='PLAYING'){
+    STATE.perspective=STATE.perspective==='first'?'top':STATE.perspective==='top'?'side':'first';
+    e.preventDefault();
+  }
   const gk=['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','KeyW','KeyA','KeyS','KeyD','Space'];
   if(gk.includes(e.code)) e.preventDefault();
 });
@@ -708,6 +716,10 @@ function renderHUD(){
   ctx.textAlign='right';
   for(let i=0;i<3;i++){ctx.fillStyle=i<STATE.lives?'#ff4444':'#444';ctx.fillRect(W-8-(2-i)*14,7,10,12);}
   ctx.fillStyle='#aaffaa'; ctx.fillText(`○${pelletsLeft}`,W-52,13);
+  // Perspective indicator — shows current view mode, TAB to cycle
+  const viewLabel=STATE.perspective==='first'?'1P':STATE.perspective==='top'?'TD':'SS';
+  ctx.font='5px "Press Start 2P",monospace'; ctx.fillStyle='#555';
+  ctx.textAlign='left'; ctx.fillText(`[TAB]${viewLabel}`,8,24);
 
   // Frighten timer sub-bar
   if(STATE.frightenTimer>0){
@@ -823,6 +835,11 @@ function renderScene(){
 
   if(STATE.deathFlashTimer>0){
     ctx.fillStyle=`rgba(220,0,0,${(STATE.deathFlashTimer/0.4).toFixed(2)})`;
+    ctx.fillRect(0,0,W,H);
+  }
+  // Fire breath flash — brief orange screen wash in first-person view
+  if(STATE.fireProjTimer>0&&STATE.perspective==='first'){
+    ctx.fillStyle=`rgba(255,100,0,${(STATE.fireProjTimer/0.3*0.35).toFixed(2)})`;
     ctx.fillRect(0,0,W,H);
   }
   if(STATE.shieldActive&&Math.floor(pulse*4)%6===0){
@@ -1261,6 +1278,7 @@ function handleAttack(){
     STATE.score+=closest.isBoss?500:100;
     STATE.killMessage=closest.isBoss?'BOSS SCORCHED!':`${(gd?gd.killMsg:'GHOST INCINERATED!').replace('!','')} (FIRE)!`;
     STATE.killMessageTimer=2;closest.dead=true;closest.deadTimer=5;
+    STATE.fireProjTimer=0.30; // trigger projectile animation in current view
     playSound('ghostDefeat');return;
   }
   if(STATE.frightenTimer<=0)return;
@@ -1328,8 +1346,188 @@ function updatePlayer(dt){
   }
   if(STATE.activePowerUp==='ANCIENT_RAGE')STATE.activePowerUpTimer=STATE.frightenTimer;
   if(STATE.ancientEyeTimer>0)STATE.ancientEyeTimer=Math.max(0,STATE.ancientEyeTimer-dt);
+  if(STATE.fireProjTimer>0)STATE.fireProjTimer=Math.max(0,STATE.fireProjTimer-dt);
 
   if(pelletsLeft<=0){updateHighScore();playSound('levelDone');STATE.phase='LEVEL_COMPLETE';}
+}
+
+// ================================================================
+// TOP-DOWN PERSPECTIVE — bird's eye, full maze always visible
+// ================================================================
+function renderTopDown(){
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+  const cs=Math.min(Math.floor(W/MAP_W),Math.floor(H/MAP_H));
+  const ox=Math.floor((W-cs*MAP_W)/2),oy=Math.floor((H-cs*MAP_H)/2);
+  const pal=WALL_PALETTES[STATE.level]||WALL_PALETTES[1];
+
+  for(let y=0;y<MAP_H;y++) for(let x=0;x<MAP_W;x++){
+    const cell=map[y][x],sx=ox+x*cs,sy=oy+y*cs;
+    if(cell===1){
+      const[pr,pg,pb]=pal.bright;
+      ctx.fillStyle=`rgb(${pr},${pg},${pb})`; ctx.fillRect(sx,sy,cs,cs);
+    } else if(cell===2){
+      const g=Math.floor(90+Math.sin(pulse*2)*40);
+      ctx.fillStyle=`rgb(0,${g},30)`; ctx.fillRect(sx,sy,cs,cs);
+    }
+    // Pellets — always visible in top-down; gold glow when ANCIENT EYE active
+    if(pelletGrid[y]&&pelletGrid[y][x]>0){
+      const isPwr=pelletGrid[y][x]===2,ae=STATE.ancientEyeTimer>0;
+      const pr=Math.max(1,isPwr?Math.floor(cs*0.28):Math.floor(cs*0.15));
+      const gb=ae?Math.floor(190+Math.sin(pulse*4)*55):0;
+      ctx.fillStyle=ae?(isPwr?`rgb(255,${gb},0)`:`rgb(${gb},${gb},0)`)
+                    :(isPwr?'#00ffc8':'#ffe632');
+      ctx.beginPath();ctx.arc(sx+cs/2,sy+cs/2,pr,0,TWO_PI);ctx.fill();
+    }
+  }
+
+  // Power-ups (bob)
+  for(const pu of powerUps){
+    if(pu.collected) continue;
+    const def=POWER_UP_DEFS[pu.type];
+    const sx=ox+pu.x*cs-cs*0.22,sy=oy+pu.y*cs-cs*0.22+Math.sin(pulse*2.5+pu.bobPhase)*2;
+    const sz=Math.max(4,Math.floor(cs*0.44));
+    ctx.fillStyle=def.color; ctx.fillRect(sx,sy,sz,sz);
+    ctx.strokeStyle=def.hi; ctx.lineWidth=1; ctx.strokeRect(sx,sy,sz,sz);
+  }
+
+  // Ghosts
+  for(const g of ghosts){
+    if(g.dead) continue;
+    const fr=STATE.frightenTimer>0;
+    const bl=fr&&STATE.frightenTimer<3&&Math.floor(pulse*4)%2===0;
+    const sx=ox+g.x*cs,sy2=oy+g.y*cs;
+    const r=Math.max(3,Math.floor(cs*0.38));
+    ctx.fillStyle=g.stunTimer>0?'#888800':fr?(bl?'#fff':'#4488ff'):g.color;
+    ctx.beginPath();ctx.arc(sx,sy2,r,0,TWO_PI);ctx.fill();
+    const er=Math.max(1,Math.floor(r*0.35));
+    ctx.fillStyle='#fff';
+    ctx.fillRect(sx-r*0.45,sy2-r*0.3,er,er);ctx.fillRect(sx+r*0.1,sy2-r*0.3,er,er);
+  }
+
+  // Player — white triangle arrow pointing in facing direction
+  const px=ox+player.x*cs,py2=oy+player.y*cs,ts=Math.max(4,Math.floor(cs*0.45));
+  ctx.save();ctx.translate(px,py2);ctx.rotate(player.angle);
+  ctx.fillStyle='#fff';
+  ctx.beginPath();ctx.moveTo(ts,0);ctx.lineTo(-ts,-ts*0.65);ctx.lineTo(-ts*0.5,0);ctx.lineTo(-ts,ts*0.65);
+  ctx.closePath();ctx.fill();ctx.restore();
+
+  // FIRE_BREATH beam (top-down: orange line in facing direction, 5 world units)
+  if(STATE.fireProjTimer>0){
+    const al=(STATE.fireProjTimer/0.3).toFixed(2);
+    ctx.strokeStyle=`rgba(255,120,0,${al})`; ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(px,py2);
+    ctx.lineTo(px+Math.cos(player.angle)*5*cs,py2+Math.sin(player.angle)*5*cs);
+    ctx.stroke();
+  }
+
+  if(STATE.deathFlashTimer>0){
+    ctx.fillStyle=`rgba(220,0,0,${(STATE.deathFlashTimer/0.4).toFixed(2)})`;ctx.fillRect(0,0,W,H);}
+  ctx.fillStyle='rgba(0,0,0,0.07)';for(let y=0;y<H;y+=3)ctx.fillRect(0,y,W,1);
+  renderHUD();
+}
+
+// ================================================================
+// SIDE-SCROLL PERSPECTIVE — scrolling 2D cross-section, camera follows player
+// ================================================================
+function renderSideScroll(){
+  const cs=48; // pixels per world unit
+  // Camera snaps to player, clamped to maze bounds
+  const camX=Math.max(0,Math.min(MAP_W*cs-W,  player.x*cs-W/2));
+  const camY=Math.max(0,Math.min(MAP_H*cs-H,  player.y*cs-H/2));
+  const pal=WALL_PALETTES[STATE.level]||WALL_PALETTES[1];
+
+  ctx.fillStyle='#090912'; ctx.fillRect(0,0,W,H); // background
+
+  for(let y=0;y<MAP_H;y++) for(let x=0;x<MAP_W;x++){
+    const sx=Math.floor(x*cs-camX),sy=Math.floor(y*cs-camY);
+    if(sx+cs<0||sx>W||sy+cs<0||sy>H) continue;
+    const cell=map[y][x];
+    if(cell===1){
+      const[pr,pg,pb]=pal.bright;
+      ctx.fillStyle=`rgb(${pr},${pg},${pb})`; ctx.fillRect(sx,sy,cs,Math.ceil(cs/2));
+      const[dr,dg,db]=pal.dark;
+      ctx.fillStyle=`rgb(${dr},${dg},${db})`; ctx.fillRect(sx,sy+Math.ceil(cs/2),cs,Math.ceil(cs/2));
+    } else {
+      ctx.fillStyle='#1e1e1e'; ctx.fillRect(sx,sy+cs-7,cs,7);       // floor strip
+      ctx.fillStyle='#111';    ctx.fillRect(sx,sy,cs,7);             // ceiling strip
+      if(cell===2){ ctx.fillStyle='rgba(0,255,60,0.08)';ctx.fillRect(sx,sy,cs,cs); }
+    }
+    // Pellets on floor of open cells
+    if(cell!==1&&pelletGrid[y]&&pelletGrid[y][x]>0){
+      const isPwr=pelletGrid[y][x]===2,ae=STATE.ancientEyeTimer>0;
+      const pr=isPwr?6:3;
+      const cx2=sx+cs/2,cy2=sy+cs-7-pr;
+      const gb=ae?Math.floor(190+Math.sin(pulse*4)*55):0;
+      ctx.fillStyle=ae?(isPwr?`rgb(255,${gb},0)`:`rgb(${gb},${gb},0)`)
+                    :(isPwr?'#00ffc8':'#ffe632');
+      ctx.beginPath();ctx.arc(cx2,cy2,pr,0,TWO_PI);ctx.fill();
+    }
+  }
+
+  // Power-ups
+  for(const pu of powerUps){
+    if(pu.collected) continue;
+    const def=POWER_UP_DEFS[pu.type];
+    const sx=Math.floor(pu.x*cs-camX)-12;
+    const sy2=Math.floor(pu.y*cs-camY)-12+Math.floor(Math.sin(pulse*2.5+pu.bobPhase)*5);
+    ctx.fillStyle=def.color;ctx.fillRect(sx,sy2,24,24);
+    ctx.strokeStyle=def.hi;ctx.lineWidth=1;ctx.strokeRect(sx,sy2,24,24);
+  }
+
+  // Ghosts
+  for(const g of ghosts){
+    if(g.dead) continue;
+    const fr=STATE.frightenTimer>0;
+    const bl=fr&&STATE.frightenTimer<3&&Math.floor(pulse*4)%2===0;
+    const gsx=Math.floor(g.x*cs-camX),gsy=Math.floor(g.y*cs-camY)-20;
+    const gcol=g.stunTimer>0?'#888800':fr?(bl?'#fff':'#4488ff'):g.color;
+    const gw=Math.floor(24*g.scale),gh2=Math.floor(26*g.scale);
+    ctx.fillStyle=gcol;ctx.fillRect(gsx-gw/2,gsy,gw,gh2);
+    ctx.fillRect(gsx-gw/2-2,gsy+gh2,gw+4,7); // skirt
+    const ew=Math.max(2,Math.floor(gw*0.22));
+    ctx.fillStyle='#fff';
+    ctx.fillRect(gsx-gw*0.32,gsy+Math.floor(gh2*0.2),ew,ew);
+    ctx.fillRect(gsx+gw*0.10,gsy+Math.floor(gh2*0.2),ew,ew);
+    ctx.fillStyle='#000';
+    ctx.fillRect(gsx-gw*0.25,gsy+Math.floor(gh2*0.27),Math.max(1,ew-1),Math.max(1,ew-1));
+    ctx.fillRect(gsx+gw*0.17,gsy+Math.floor(gh2*0.27),Math.max(1,ew-1),Math.max(1,ew-1));
+  }
+
+  // Player — character sprite at screen center; flip horizontally by facing direction
+  const pcx=W/2,pcy=H/2;
+  const flip=Math.cos(player.angle)<0;
+  const walkFrame=Math.floor(pulse*5)%2; // 2-frame walk cycle
+  ctx.save();
+  if(flip){ctx.translate(pcx,pcy);ctx.scale(-1,1);ctx.translate(-pcx,-pcy);}
+  // Body
+  ctx.fillStyle=char.color||'#88ff44';
+  ctx.fillRect(pcx-8,pcy-22,16,22);
+  // Head
+  ctx.fillStyle='#ffcc88';ctx.fillRect(pcx-8,pcy-34,16,13);
+  // Eyes (simple white dots)
+  ctx.fillStyle='#333';ctx.fillRect(pcx+1,pcy-30,4,4);
+  // Legs (alternating walk frames)
+  ctx.fillStyle=char.color||'#88ff44';
+  const l1off=walkFrame?-3:0,l2off=walkFrame?0:-3;
+  ctx.fillRect(pcx-8,pcy+l1off,7,12+Math.abs(l1off));
+  ctx.fillRect(pcx+1,pcy+l2off,7,12+Math.abs(l2off));
+  ctx.restore();
+
+  // FIRE_BREATH projectile (side-scroll: horizontal rect flying from player)
+  if(STATE.fireProjTimer>0){
+    const dir=Math.cos(player.angle)>=0?1:-1;
+    const al=(STATE.fireProjTimer/0.3).toFixed(2);
+    ctx.fillStyle=`rgba(255,120,0,${al})`;
+    const projW=80;
+    ctx.fillRect(pcx+(dir>0?10:-10-projW),pcy-10,projW,9);
+    ctx.fillStyle=`rgba(255,220,0,${al})`;
+    ctx.fillRect(pcx+(dir>0?10:-10-projW*0.6),pcy-8,Math.floor(projW*0.6),5);
+  }
+
+  if(STATE.deathFlashTimer>0){
+    ctx.fillStyle=`rgba(220,0,0,${(STATE.deathFlashTimer/0.4).toFixed(2)})`;ctx.fillRect(0,0,W,H);}
+  ctx.fillStyle='rgba(0,0,0,0.07)';for(let y=0;y<H;y+=3)ctx.fillRect(0,y,W,1);
+  renderHUD();
 }
 
 // ================================================================
@@ -1495,11 +1693,18 @@ function loop(ts){
   lastTime=ts;
   pulse+=dt; // global animation timer — drives all pulsing effects
 
+  // Helper: render the active in-game perspective (shared by PLAYING + LIFE_SAVE)
+  function renderCurrentView(){
+    if(STATE.perspective==='top')  renderTopDown();
+    else if(STATE.perspective==='side') renderSideScroll();
+    else renderScene();
+  }
+
   switch(STATE.phase){
     case 'AGE_SELECT':    updateAgeSelect();      renderAgeSelect();              break;
     case 'TITLE':         updateTitle(dt);        renderTitle();                  break;
-    case 'PLAYING':       updatePlayer(dt);       updateGhosts(dt); renderScene(); break;
-    case 'LIFE_SAVE':     updateLifeSave(dt);     renderScene(); renderLifeSaveModal(); break;
+    case 'PLAYING':       updatePlayer(dt);       updateGhosts(dt); renderCurrentView(); break;
+    case 'LIFE_SAVE':     updateLifeSave(dt);     renderCurrentView(); renderLifeSaveModal(); break;
     case 'LEVEL_COMPLETE':updateLevelComplete();  renderLevelComplete();          break;
     case 'WIN':           renderWin();                                            break;
     case 'GAME_OVER':     updateGameOver();        renderGameOver();              break;
